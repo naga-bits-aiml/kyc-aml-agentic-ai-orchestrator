@@ -636,7 +636,7 @@ Supported document types:
         """Start the interactive chat session."""
         print("\n")
         print("╔════════════════════════════════════════════════════════════╗")
-        print("║    KYC-AML Agentic AI Orchestrator - Chat Interface       ║")
+        print("║    KYC-AML Agentic AI Orchestrator - Chat Interface        ║")
         print("╚════════════════════════════════════════════════════════════╝")
         print("\n💬 Welcome! I'm your KYC-AML document processing assistant.")
         print("\n📋 Workflow Guidance:")

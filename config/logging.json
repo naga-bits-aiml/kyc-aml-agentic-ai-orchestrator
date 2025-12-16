@@ -13,10 +13,6 @@
       },
       "simple": {
         "format": "%(levelname)s - %(message)s"
-      },
-      "json": {
-        "class": "pythonjsonlogger.jsonlogger.JsonFormatter",
-        "format": "%(asctime)s %(name)s %(levelname)s %(message)s"
       }
     },
     "handlers": {

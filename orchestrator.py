@@ -35,7 +35,9 @@ class KYCAMLOrchestrator:
         self.intake_agent = DocumentIntakeAgent(llm=self.llm)
         self.classifier_agent = DocumentClassifierAgent(llm=self.llm)
         
-        logger.info(f"Orchestrator initialized with model: {self.model_name}")
+        # Log actual model being used
+        actual_model = getattr(self.llm, 'model_name', None) or getattr(self.llm, 'model', 'unknown')
+        logger.info(f"Orchestrator initialized successfully with {config.llm_provider} provider (model: {actual_model})")
     
     def _initialize_llm(self):
         """Initialize the language model based on configuration."""
