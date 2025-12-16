@@ -1,0 +1,23 @@
+{
+  "paths": {
+    "base_dir": ".",
+    "documents": {
+      "base": "documents",
+      "intake": "documents/intake",
+      "processed": "documents/processed",
+      "archive": "documents/archive",
+      "temp": "documents/temp"
+    },
+    "metadata": {
+      "file_mapping": "documents/intake/file_metadata.json"
+    },
+    "logs": {
+      "dir": "logs",
+      "file": "logs/kyc_aml_orchestrator.log"
+    },
+    "chat": {
+      "history_dir": "chat_history",
+      "temp_uploads": "temp_uploads"
+    }
+  }
+}

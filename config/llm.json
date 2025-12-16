@@ -1,0 +1,31 @@
+{
+  "llm": {
+    "provider": "google",
+    "openai": {
+      "api_key": "${OPENAI_API_KEY}",
+      "model": "gpt-4o-mini",
+      "temperature": 0.1,
+      "max_tokens": 4000
+    },
+    "google": {
+      "api_key": "${GOOGLE_API_KEY}",
+      "model": "gemini-2.5-flash",
+      "temperature": 0.1,
+      "max_tokens": 4000
+    },
+    "azure": {
+      "api_key": "${AZURE_OPENAI_API_KEY}",
+      "endpoint": "${AZURE_OPENAI_ENDPOINT}",
+      "deployment_name": "${AZURE_OPENAI_DEPLOYMENT_NAME}",
+      "api_version": "2024-02-15-preview"
+    },
+    "anthropic": {
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "model": "claude-3-sonnet-20240229"
+    },
+    "ollama": {
+      "base_url": "http://localhost:11434",
+      "model": "llama2"
+    }
+  }
+}

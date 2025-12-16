@@ -1,0 +1,2 @@
+# Flask for mock API server
+flask==3.0.0

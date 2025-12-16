@@ -1,0 +1,88 @@
+{
+  "logging": {
+    "version": 1,
+    "disable_existing_loggers": false,
+    "formatters": {
+      "default": {
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        "datefmt": "%Y-%m-%d %H:%M:%S"
+      },
+      "detailed": {
+        "format": "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s() - %(message)s",
+        "datefmt": "%Y-%m-%d %H:%M:%S"
+      },
+      "simple": {
+        "format": "%(levelname)s - %(message)s"
+      },
+      "json": {
+        "class": "pythonjsonlogger.jsonlogger.JsonFormatter",
+        "format": "%(asctime)s %(name)s %(levelname)s %(message)s"
+      }
+    },
+    "handlers": {
+      "console": {
+        "class": "logging.StreamHandler",
+        "level": "INFO",
+        "formatter": "default",
+        "stream": "ext://sys.stdout"
+      },
+      "file": {
+        "class": "logging.handlers.RotatingFileHandler",
+        "level": "DEBUG",
+        "formatter": "detailed",
+        "filename": "logs/kyc_aml_orchestrator.log",
+        "maxBytes": 10485760,
+        "backupCount": 5,
+        "encoding": "utf8"
+      },
+      "error_file": {
+        "class": "logging.handlers.RotatingFileHandler",
+        "level": "ERROR",
+        "formatter": "detailed",
+        "filename": "logs/errors.log",
+        "maxBytes": 10485760,
+        "backupCount": 3,
+        "encoding": "utf8"
+      }
+    },
+    "loggers": {
+      "kyc_aml_orchestrator": {
+        "level": "DEBUG",
+        "handlers": ["console", "file", "error_file"],
+        "propagate": false
+      },
+      "crewai": {
+        "level": "INFO",
+        "handlers": ["console", "file"],
+        "propagate": false
+      },
+      "langchain": {
+        "level": "WARNING",
+        "handlers": ["console", "file"],
+        "propagate": false
+      },
+      "openai": {
+        "level": "WARNING",
+        "handlers": ["console"],
+        "propagate": false
+      }
+    },
+    "root": {
+      "level": "INFO",
+      "handlers": ["console", "file"]
+    }
+  },
+  "log_settings": {
+    "level": "INFO",
+    "enable_file_logging": true,
+    "enable_console_logging": true,
+    "log_to_file": true,
+    "rotate_logs": true,
+    "max_log_size_mb": 10,
+    "backup_count": 5,
+    "log_format": "detailed",
+    "log_date_format": "%Y-%m-%d %H:%M:%S",
+    "log_file_path": "logs/kyc_aml_orchestrator.log",
+    "error_log_path": "logs/errors.log"
+  }
+}

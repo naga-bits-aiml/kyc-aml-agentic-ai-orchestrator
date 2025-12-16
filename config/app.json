@@ -1,0 +1,32 @@
+{
+  "application": {
+    "name": "KYC-AML Agentic AI Orchestrator",
+    "version": "1.0.0",
+    "environment": "development"
+  },
+  "document_validation": {
+    "max_size_mb": 10,
+    "allowed_extensions": [".pdf", ".jpg", ".jpeg", ".png", ".docx", ".doc"],
+    "enable_hash_verification": true,
+    "sanitize_filenames": true
+  },
+  "processing": {
+    "batch_size": 10,
+    "enable_batch_processing": true
+  },
+  "chat": {
+    "history_enabled": true,
+    "max_history": 100,
+    "auto_save": true
+  },
+  "security": {
+    "enable_file_hash": true,
+    "max_upload_size_mb": 10,
+    "allowed_mime_types": [
+      "application/pdf",
+      "image/jpeg",
+      "image/png",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ]
+  }
+}
