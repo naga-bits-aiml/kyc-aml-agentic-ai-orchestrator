@@ -290,6 +290,26 @@ class ConfigLoader:
         return self.get('api.classifier.timeout', 30)
     
     @property
+    def ocr_api_url(self) -> str:
+        return self.get('api.ocr.base_url', '')
+    
+    @property
+    def ocr_api_key(self) -> str:
+        return self.get('api.ocr.api_key', '')
+    
+    @property
+    def ocr_timeout(self) -> int:
+        return self.get('api.ocr.timeout', 60)
+    
+    @property
+    def ocr_provider(self) -> str:
+        return self.get('api.ocr.provider', 'tesseract')
+    
+    @property
+    def ocr_confidence_threshold(self) -> float:
+        return self.get('api.ocr.confidence_threshold', 0.7)
+    
+    @property
     def llm_provider(self) -> str:
         return self.get('llm.provider', 'openai')
 
@@ -356,6 +376,22 @@ class Settings:
     @property
     def classifier_timeout(self):
         return self._config.classifier_timeout
+    
+    @property
+    def ocr_api_base_url(self):
+        return self._config.ocr_api_url
+    
+    @property
+    def ocr_api_key(self):
+        return self._config.ocr_api_key
+    
+    @property
+    def ocr_timeout(self):
+        return self._config.ocr_timeout
+    
+    @property
+    def ocr_provider(self):
+        return self._config.ocr_provider
     
     @property
     def documents_dir(self):

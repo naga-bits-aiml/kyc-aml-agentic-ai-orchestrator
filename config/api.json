@@ -6,6 +6,15 @@
       "timeout": 30,
       "max_retries": 3,
       "retry_delay": 2
+    },
+    "ocr": {
+      "base_url": "${OCR_API_BASE_URL}",
+      "api_key": "${OCR_API_KEY}",
+      "timeout": 60,
+      "max_retries": 3,
+      "retry_delay": 2,
+      "provider": "tesseract",
+      "confidence_threshold": 0.7
     }
   }
 }

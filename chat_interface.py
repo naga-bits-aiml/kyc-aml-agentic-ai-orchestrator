@@ -15,7 +15,11 @@ from pathlib import Path
 from orchestrator import KYCAMLOrchestrator
 from agents import DocumentIntakeAgent, DocumentClassifierAgent
 from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    GOOGLE_AVAILABLE = True
+except ImportError:
+    GOOGLE_AVAILABLE = False
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from utilities import config, settings, logger
 

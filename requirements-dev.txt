@@ -1,2 +1,11 @@
-# Flask for mock API server
-flask==3.0.0
+-r requirements.txt
+
+# Dev & testing tools
+pytest==8.3.4
+pytest-cov==5.0.0
+black==24.10.0
+ruff==0.6.9
+mypy==1.10.0
+
+# Mock services for local testing (non-production)
+Flask==3.0.0
