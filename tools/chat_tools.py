@@ -786,6 +786,20 @@ def create_chat_tools(chat_interface):
                     msg += f"   • Successful: {doc_stats.get('successful', 0)}\n"
                     msg += f"   • Failed: {doc_stats.get('failed', 0)}\n"
                 
+                # Check for child documents that need processing
+                child_docs = result.get('child_documents_pending', [])
+                if child_docs:
+                    msg += f"\n👶 Child Documents Detected:\n"
+                    msg += f"   Found {len(child_docs)} child document(s) that need processing.\n"
+                    for child in child_docs[:5]:  # Show first 5
+                        msg += f"   • {child['document_id']} (from {child['parent_id']})\n"
+                    if len(child_docs) > 5:
+                        msg += f"   ... and {len(child_docs) - 5} more\n"
+                    
+                    msg += f"\n💡 To process child documents, use:\n"
+                    for child in child_docs[:3]:  # Show command for first 3
+                        msg += f"   'process {child['document_id']}'\n"
+                
                 # Suggest next steps
                 if not case_ref and result.get('validated_documents'):
                     doc_ids = [d.get('document_id') for d in result['validated_documents'] if d.get('document_id')]
@@ -803,6 +817,210 @@ def create_chat_tools(chat_interface):
             logger.error(f"Document processing error: {e}")
             return f"❌ Error processing documents: {str(e)}"
     
+    @tool
+    def process_document_by_id(document_id: str) -> str:
+        """Resume processing for a document that already exists by its document ID.
+        
+        This tool:
+        1. Loads the document's metadata from documents/intake/
+        2. Checks which stages are pending
+        3. Automatically resumes processing from the appropriate stage
+        
+        Use this when a user provides a document ID like "DOC_20260127_190130_8A0B7".
+        
+        Args:
+            document_id: The document ID (e.g., DOC_20260127_190130_8A0B7)
+            
+        Returns:
+            Processing results with stage completion status.
+        """
+        try:
+            # Find document metadata in intake directory
+            intake_dir = Path(settings.documents_dir) / "intake"
+            metadata_path = intake_dir / f"{document_id}.metadata.json"
+            
+            if not metadata_path.exists():
+                return f"❌ Document {document_id} not found in intake directory.\n   💡 Use submit_documents_for_processing to upload new documents."
+            
+            # Load metadata
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            
+            # Check if it has the new structure with stage blocks
+            required_blocks = ['intake', 'classification', 'extraction']
+            has_stage_blocks = all(stage in metadata for stage in required_blocks)
+            
+            if not has_stage_blocks:
+                missing = [s for s in required_blocks if s not in metadata]
+                return f"⚠️  Document {document_id} uses old metadata format.\n   Missing blocks: {', '.join(missing)}\n   Please re-upload the document for processing."
+            
+            # Check what needs to be processed
+            intake_status = metadata.get('intake', {}).get('status', 'pending')
+            classification_status = metadata.get('classification', {}).get('status', 'pending')
+            extraction_status = metadata.get('extraction', {}).get('status', 'pending')
+            
+            if intake_status != 'success':
+                return f"❌ Document {document_id} intake failed. Please re-upload the document."
+            
+            # Build status message
+            msg = f"\n📄 Document: {document_id}\n"
+            msg += f"   📁 File: {metadata.get('original_filename', 'unknown')}\n\n"
+            msg += f"Stage Status:\n"
+            msg += f"   ✅ Intake: {intake_status}\n"
+            msg += f"   {'✅' if classification_status == 'success' else '⏳'} Classification: {classification_status}\n"
+            msg += f"   {'✅' if extraction_status == 'success' else '⏳'} Extraction: {extraction_status}\n\n"
+            
+            # Determine what to do
+            if classification_status == 'success' and extraction_status == 'success':
+                return msg + "✨ All stages completed! Document fully processed."
+            
+            # Resume processing
+            msg += "🚀 Resuming processing...\n\n"
+            
+            # Get stored document path
+            stored_path = metadata.get('stored_path')
+            if not stored_path or not Path(stored_path).exists():
+                return f"❌ Document file not found at: {stored_path}"
+            
+            # Use flow to process from current state
+            from flows.document_processing_flow import kickoff_flow
+            
+            result = kickoff_flow(
+                file_paths=[stored_path],
+                case_id=None,  # Case-agnostic processing
+                llm=chat_interface.llm
+            )
+            
+            if result:
+                msg += f"✅ Processing completed!\n\n"
+                
+                # Show stage metadata from result
+                if 'stage_metadata' in result:
+                    stage_meta = result['stage_metadata']
+                    for stage_name in ['intake', 'classification', 'extraction']:
+                        stage_info = stage_meta.get(stage_name, {})
+                        status = stage_info.get('status', 'unknown')
+                        stage_msg = stage_info.get('msg', '')
+                        icon = '✅' if status == 'success' else ('❌' if status == 'fail' else '⏳')
+                        msg += f"   {icon} {stage_name.title()}: {status}\n"
+                        if stage_msg:
+                            msg += f"      {stage_msg}\n"
+                
+                # Show case readiness
+                if 'case_readiness' in result:
+                    readiness = result['case_readiness']
+                    is_complete = readiness.get('is_complete', False)
+                    msg += f"\n{'✨' if is_complete else '⚠️'}  Case Readiness: {'Complete' if is_complete else 'Incomplete'}\n"
+                    
+                    recommendations = readiness.get('recommendations', [])
+                    if recommendations:
+                        msg += "\n💡 Recommendations:\n"
+                        for rec in recommendations:
+                            msg += f"   • {rec}\n"
+            
+            return msg
+            
+        except Exception as e:
+            logger.error(f"Error processing document by ID: {e}", exc_info=True)
+            return f"❌ Error processing document: {str(e)}"
+    
+    @tool
+    def reset_document_stage(document_id: str, stage_name: str, reason: str = "Manual reset") -> str:
+        """Reset a specific processing stage for a document to allow reprocessing.
+        
+        This tool allows you to reset a stage (classification or extraction) back to 'pending',
+        which enables reprocessing of that stage. Useful when:
+        - Classification result was incorrect and needs to be redone
+        - Extraction failed and you want to retry
+        - API was updated and you want to re-classify with new model
+        - Manual review determined the result needs correction
+        
+        Args:
+            document_id: The document ID (e.g., DOC_20260127_192803_A7EF0)
+            stage_name: Stage to reset ('classification' or 'extraction')
+            reason: Reason for resetting (for audit trail)
+            
+        Returns:
+            Confirmation message with reset details.
+        """
+        try:
+            # Find document metadata
+            intake_dir = Path(settings.documents_dir) / "intake"
+            metadata_path = intake_dir / f"{document_id}.metadata.json"
+            
+            if not metadata_path.exists():
+                return f"❌ Document {document_id} not found."
+            
+            # Load metadata
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            
+            # Validate stage name
+            valid_stages = ['classification', 'extraction']
+            if stage_name not in valid_stages:
+                return f"❌ Invalid stage '{stage_name}'. Must be one of: {', '.join(valid_stages)}"
+            
+            # Check if stage exists
+            if stage_name not in metadata:
+                return f"❌ Stage '{stage_name}' not found in document metadata."
+            
+            # Save previous state for audit
+            previous_state = metadata[stage_name].copy()
+            
+            # Reset the stage to pending
+            metadata[stage_name] = {
+                "status": "pending",
+                "msg": "",
+                "error": None,
+                "trace": None,
+                "timestamp": None
+            }
+            
+            # Add reset history
+            if 'processing_history' not in metadata:
+                metadata['processing_history'] = []
+            
+            metadata['processing_history'].append({
+                "action": "stage_reset",
+                "stage": stage_name,
+                "reason": reason,
+                "previous_state": previous_state,
+                "reset_at": datetime.now().isoformat()
+            })
+            
+            # Update last_updated timestamp
+            metadata["last_updated"] = datetime.now().isoformat()
+            
+            # Update stage indicator if needed
+            if metadata.get('stage') == stage_name:
+                # If current stage is the one being reset, move back to previous stage
+                if stage_name == 'extraction':
+                    metadata['stage'] = 'classification'
+                elif stage_name == 'classification':
+                    metadata['stage'] = 'intake'
+            
+            # Save updated metadata
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            msg = f"✅ Stage reset successfully!\n\n"
+            msg += f"📄 Document: {document_id}\n"
+            msg += f"🔄 Stage Reset: {stage_name}\n"
+            msg += f"📝 Reason: {reason}\n"
+            msg += f"⏰ Reset at: {datetime.now().isoformat()}\n\n"
+            msg += f"Previous state:\n"
+            msg += f"  • Status: {previous_state.get('status', 'unknown')}\n"
+            msg += f"  • Message: {previous_state.get('msg', 'N/A')}\n\n"
+            msg += f"💡 Next: Use process_document_by_id('{document_id}') to reprocess"
+            
+            logger.info(f"Reset stage '{stage_name}' for document {document_id}. Reason: {reason}")
+            
+            return msg
+            
+        except Exception as e:
+            logger.error(f"Error resetting document stage: {e}", exc_info=True)
+            return f"❌ Error resetting stage: {str(e)}"
+    
     return [
         list_all_cases, 
         get_current_status, 
@@ -815,5 +1033,7 @@ def create_chat_tools(chat_interface):
         delete_case,
         delete_document,
         update_document_metadata,
-        submit_documents_for_processing
+        submit_documents_for_processing,
+        process_document_by_id,
+        reset_document_stage
     ]

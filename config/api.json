@@ -13,7 +13,7 @@
       "timeout": 60,
       "max_retries": 3,
       "retry_delay": 2,
-      "provider": "tesseract",
+      "provider": "google_vision",
       "confidence_threshold": 0.7
     }
   }

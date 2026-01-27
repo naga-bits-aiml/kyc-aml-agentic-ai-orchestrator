@@ -5,10 +5,12 @@ intake → classification → extraction → processed
 """
 
 from crewai.tools import tool
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pathlib import Path
 from case_metadata_manager import StagedCaseMetadataManager
 from utilities import logger, settings
+import json
+from datetime import datetime
 
 
 def _get_stage_manager(case_id: str) -> StagedCaseMetadataManager:
@@ -78,23 +80,66 @@ def move_document_to_stage(case_id: str, document_id: str, stage: str) -> Dict[s
 
 
 @tool("Get Documents by Stage")
-def get_documents_by_stage(case_id: str, stage: str) -> Dict[str, Any]:
+def get_documents_by_stage(stage: str) -> Dict[str, Any]:
     """
     Get all documents in a specific workflow stage.
     
+    This tool searches across all document directories to find documents
+    at the specified stage, regardless of case association.
+    
     Args:
-        case_id: Case identifier
         stage: Stage name (intake/classification/extraction/processed)
         
     Returns:
         List of documents in the specified stage
     
     Example:
-        get_documents_by_stage("KYC-2026-001", "intake")
+        get_documents_by_stage("classification")
     """
     try:
-        manager = _get_stage_manager(case_id)
-        documents = manager.get_document_by_stage(stage)
+        valid_stages = ['intake', 'classification', 'extraction', 'processed']
+        if stage not in valid_stages:
+            return {
+                "success": False,
+                "error": f"Invalid stage '{stage}'. Must be one of: {valid_stages}"
+            }
+        
+        # Search through stage-based directories
+        stage_dirs = [
+            Path(settings.documents_dir) / "intake",
+            Path(settings.documents_dir) / "classification", 
+            Path(settings.documents_dir) / "extraction",
+            Path(settings.documents_dir) / "processed"
+        ]
+        
+        documents = []
+        
+        # Scan all metadata files
+        for stage_dir in stage_dirs:
+            if not stage_dir.exists():
+                continue
+                
+            for metadata_file in stage_dir.glob("*.metadata.json"):
+                try:
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+                    
+                    # Check if document is in requested stage
+                    if metadata.get('stage') == stage:
+                        documents.append({
+                            "document_id": metadata.get('document_id'),
+                            "original_filename": metadata.get('original_filename'),
+                            "stored_path": metadata.get('stored_path'),
+                            "stage": metadata.get('stage'),
+                            "document_type": metadata.get('classification', {}).get('document_type'),
+                            "confidence": metadata.get('classification', {}).get('confidence'),
+                            "last_updated": metadata.get('last_updated')
+                        })
+                except Exception as e:
+                    logger.warning(f"Error reading metadata file {metadata_file}: {e}")
+                    continue
+        
+        logger.info(f"Found {len(documents)} documents in stage '{stage}'")
         
         return {
             "success": True,
@@ -157,7 +202,7 @@ def add_document_to_case(
     document_id: str,
     filename: str,
     source_path: str,
-    parent_file: str = None
+    parent_file: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Add a new document to a case in the intake stage.
@@ -207,6 +252,7 @@ def update_document_metadata_in_stage(
 ) -> Dict[str, Any]:
     """
     Update metadata for a document without changing its stage.
+    DEPRECATED for case-agnostic workflows. Use update_document_metadata_tool instead.
     
     Args:
         case_id: Case identifier
@@ -244,5 +290,116 @@ def update_document_metadata_in_stage(
         logger.error(f"Error updating document metadata: {str(e)}")
         return {
             "success": False,
+            "error": str(e)
+        }
+
+
+@tool("Update Document Metadata")
+def update_document_metadata_tool(
+    document_id: str,
+    stage_name: str,
+    status: str,
+    msg: str = "",
+    error: Optional[str] = None,
+    trace: Optional[str] = None,
+    additional_data: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Update stage-specific metadata block for a document.
+    Each processing stage (intake, classification, extraction) updates its own block.
+    
+    Args:
+        document_id: Globally unique document ID (e.g., DOC_20260127_143022_A3F8B)
+        stage_name: Stage name to update (intake/classification/extraction)
+        status: Status of the stage (success/fail/pending/running)
+        msg: Descriptive message about the stage result
+        error: Error message if stage failed (optional)
+        trace: Stack trace if stage failed (optional)
+        additional_data: Any additional stage-specific data (optional)
+        
+    Returns:
+        Status of the update operation
+    
+    Examples:
+        # After successful classification:
+        update_document_metadata_tool(
+            document_id="DOC_20260127_143022_A3F8B",
+            stage_name="classification",
+            status="success",
+            msg="Document classified as Passport",
+            additional_data={
+                "document_type": "Passport",
+                "confidence": 0.95,
+                "categories": ["identity_proof"]
+            }
+        )
+        
+        # After failed extraction:
+        update_document_metadata_tool(
+            document_id="DOC_20260127_143022_A3F8B",
+            stage_name="extraction",
+            status="fail",
+            msg="OCR extraction failed",
+            error="API timeout",
+            trace="Traceback: ..."
+        )
+    """
+    try:
+        # Find document metadata file in intake directory
+        intake_dir = Path(settings.documents_dir) / "intake"
+        metadata_path = intake_dir / f"{document_id}.metadata.json"
+        
+        if not metadata_path.exists():
+            return {
+                "success": False,
+                "document_id": document_id,
+                "error": f"Document {document_id} not found in intake directory"
+            }
+        
+        # Load existing metadata
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        
+        # Update the specific stage block
+        stage_block = {
+            "status": status,
+            "msg": msg,
+            "error": error,
+            "trace": trace,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Add any additional data to the stage block
+        if additional_data:
+            stage_block.update(additional_data)
+        
+        # Update the stage block in metadata
+        metadata[stage_name] = stage_block
+        
+        # Update the current stage indicator if successful
+        if status == "success":
+            metadata["stage"] = stage_name
+        
+        metadata["last_updated"] = datetime.now().isoformat()
+        
+        # Save updated metadata
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        logger.info(f"Updated {stage_name} metadata for {document_id}: {status}")
+        
+        return {
+            "success": True,
+            "document_id": document_id,
+            "stage_name": stage_name,
+            "status": status,
+            "message": f"Metadata block '{stage_name}' updated successfully"
+        }
+            
+    except Exception as e:
+        logger.error(f"Error updating document metadata: {str(e)}")
+        return {
+            "success": False,
+            "document_id": document_id,
             "error": str(e)
         }

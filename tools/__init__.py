@@ -35,14 +35,14 @@ def _get_classifier_tools():
     """Lazy load classifier tools to avoid circular imports."""
     try:
         from .classifier_tools import (
-            classify_document_tool,
-            batch_classify_documents_tool,
-            get_classification_summary_tool
+            get_classifier_api_info_tool,
+            make_classifier_api_request,
+            extract_document_file_path_tool
         )
         return [
-            classify_document_tool,
-            batch_classify_documents_tool,
-            get_classification_summary_tool,
+            get_classifier_api_info_tool,
+            make_classifier_api_request,
+            extract_document_file_path_tool,
         ]
     except ImportError:
         return []

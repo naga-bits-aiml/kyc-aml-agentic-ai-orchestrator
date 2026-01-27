@@ -17,7 +17,9 @@ from datetime import datetime
 def _validate_and_store_document(file_path: str, intake_dir: Path) -> Dict[str, Any]:
     """
     Internal function to validate document and store it with unique ID.
-    Generates globally unique document ID and stores in intake directory.
+    
+    If the document already exists (based on filename or stored path), 
+    it returns the existing document ID instead of creating a duplicate.
     
     Args:
         file_path: Path to document file
@@ -29,10 +31,12 @@ def _validate_and_store_document(file_path: str, intake_dir: Path) -> Dict[str, 
     logger.info(f"Validating and storing document: {file_path}")
     
     issues = []
-    path = Path(file_path)
+    path = Path(file_path).resolve()  # Resolve to absolute path
+    intake_dir = Path(intake_dir).resolve()
     
     # Check existence
     if not path.exists():
+        logger.error(f"❌ File does not exist: {file_path}")
         return {
             "success": False,
             "file_path": file_path,
@@ -41,6 +45,139 @@ def _validate_and_store_document(file_path: str, intake_dir: Path) -> Dict[str, 
             "stored_path": None,
             "metadata": {}
         }
+    
+    logger.debug(f"🔍 Checking if document already exists...")
+    logger.debug(f"   File path: {path}")
+    logger.debug(f"   Intake dir: {intake_dir}")
+    logger.debug(f"   File parent: {path.parent}")
+    logger.debug(f"   Parents match: {path.parent == intake_dir}")
+    
+    # CHECK IF DOCUMENT ALREADY EXISTS
+    # Method 1: Check if this is already a document in intake (by path)
+    if path.parent == intake_dir and path.suffix in settings.allowed_extensions:
+        logger.debug(f"   ✓ File is in intake directory")
+        # Extract document ID from filename (format: DOC_YYYYMMDD_HHMMSS_XXXXX.ext)
+        stem = path.stem
+        logger.debug(f"   File stem: {stem}")
+        
+        if stem.startswith("DOC_") and len(stem.split("_")) >= 4:
+            logger.debug(f"   ✓ Filename matches document ID pattern")
+            # This looks like an existing document
+            metadata_path = intake_dir / f"{stem}.metadata.json"
+            logger.debug(f"   Checking metadata: {metadata_path}")
+            logger.debug(f"   Metadata exists: {metadata_path.exists()}")
+            
+            if metadata_path.exists():
+                logger.critical(f"♻️  Found existing document by filename: {stem}")
+                try:
+                    with open(metadata_path, 'r') as f:
+                        existing_metadata = json.load(f)
+                    
+                    logger.critical(
+                        "\n" + "="*80 + "\n" +
+                        "♻️  EXISTING DOCUMENT DETECTED (Method 1: Filename Match)\n" +
+                        "="*80 + "\n" +
+                        f"Document ID: {stem}\n" +
+                        f"File Path: {path}\n" +
+                        f"Metadata Found: Yes\n" +
+                        "Reusing existing document - NO DUPLICATE CREATED\n" +
+                        "="*80
+                    )
+                    
+                    return {
+                        "success": True,
+                        "file_path": file_path,
+                        "document_id": stem,
+                        "stored_path": str(path),
+                        "metadata": existing_metadata,
+                        "issues": [],
+                        "reused_existing": True
+                    }
+                except Exception as e:
+                    logger.warning(f"Could not read existing metadata: {e}")
+            else:
+                logger.debug(f"   ✗ No metadata file found for {stem}")
+        else:
+            logger.debug(f"   ✗ Filename doesn't match document ID pattern")
+    else:
+        logger.debug(f"   ✗ File is not in intake directory or wrong extension")
+    
+    # Method 2: Check for existing document by stored_path (exact match)
+    logger.debug(f"🔍 Method 2: Checking by stored_path in metadata files...")
+    for metadata_file in intake_dir.glob("*.metadata.json"):
+        try:
+            with open(metadata_file, 'r') as f:
+                existing_metadata = json.load(f)
+            
+            stored_path_in_metadata = Path(existing_metadata.get("stored_path", "")).resolve()
+            
+            # Check if stored_path matches the file we're trying to process
+            if stored_path_in_metadata == path:
+                document_id = existing_metadata.get("document_id")
+                logger.critical(
+                    "\n" + "="*80 + "\n" +
+                    "♻️  EXISTING DOCUMENT DETECTED (Method 2: Path Match)\n" +
+                    "="*80 + "\n" +
+                    f"Document ID: {document_id}\n" +
+                    f"File Path: {path}\n" +
+                    f"Metadata File: {metadata_file.name}\n" +
+                    "Reusing existing document - NO DUPLICATE CREATED\n" +
+                    "="*80
+                )
+                
+                return {
+                    "success": True,
+                    "file_path": file_path,
+                    "document_id": document_id,
+                    "stored_path": str(path),
+                    "metadata": existing_metadata,
+                    "issues": [],
+                    "reused_existing": True
+                }
+        except Exception as e:
+            logger.debug(f"Error checking metadata file {metadata_file}: {e}")
+            continue
+    
+    # Method 3: Check for existing document by original filename
+    logger.debug(f"🔍 Method 3: Checking by original_filename ({path.name})...")
+    for metadata_file in intake_dir.glob("*.metadata.json"):
+        try:
+            with open(metadata_file, 'r') as f:
+                existing_metadata = json.load(f)
+            
+            # Check if original filename matches
+            if existing_metadata.get("original_filename") == path.name:
+                document_id = existing_metadata.get("document_id")
+                stored_path = existing_metadata.get("stored_path")
+                
+                # Verify the stored file still exists
+                if Path(stored_path).exists():
+                    logger.critical(
+                        "\n" + "="*80 + "\n" +
+                        "♻️  EXISTING DOCUMENT DETECTED (Method 3: Original Filename Match)\n" +
+                        "="*80 + "\n" +
+                        f"Document ID: {document_id}\n" +
+                        f"Original Filename: {path.name}\n" +
+                        f"Stored Path: {stored_path}\n" +
+                        f"Metadata File: {metadata_file.name}\n" +
+                        "Reusing existing document - NO DUPLICATE CREATED\n" +
+                        "="*80
+                    )
+                    
+                    return {
+                        "success": True,
+                        "file_path": file_path,
+                        "document_id": document_id,
+                        "stored_path": stored_path,
+                        "metadata": existing_metadata,
+                        "issues": [],
+                        "reused_existing": True
+                    }
+        except Exception as e:
+            logger.debug(f"Error checking metadata file {metadata_file}: {e}")
+            continue
+    
+    # Document doesn't exist - proceed with validation and storage
     
     # Validate extension
     if not validate_file_extension(file_path, settings.allowed_extensions):
@@ -86,7 +223,7 @@ def _validate_and_store_document(file_path: str, intake_dir: Path) -> Dict[str, 
         # Compute file hash
         file_hash = compute_file_hash(str(stored_path))
         
-        # Build metadata
+        # Build metadata with stage-specific blocks
         metadata = {
             "document_id": document_id,
             "original_filename": path.name,
@@ -98,7 +235,31 @@ def _validate_and_store_document(file_path: str, intake_dir: Path) -> Dict[str, 
             "stage": "intake",
             "uploaded_at": datetime.now().isoformat(),
             "linked_cases": [],
-            "validation_status": "valid"
+            "linked_documents": [],
+            
+            # Stage-specific information blocks
+            "intake": {
+                "status": "success",
+                "msg": "Document validated and stored successfully",
+                "error": None,
+                "trace": None,
+                "timestamp": datetime.now().isoformat(),
+                "validation_status": "valid"
+            },
+            "classification": {
+                "status": "pending",
+                "msg": "",
+                "error": None,
+                "trace": None,
+                "timestamp": None
+            },
+            "extraction": {
+                "status": "pending",
+                "msg": "",
+                "error": None,
+                "trace": None,
+                "timestamp": None
+            }
         }
         
         # Save metadata file
@@ -187,6 +348,31 @@ def batch_validate_documents_tool(file_paths: List[str]) -> Dict[str, Any]:
         result = _validate_and_store_document(file_path, intake_dir)
         
         if result["success"]:
+            # Log whether document was reused or newly created
+            if result.get("reused_existing"):
+                logger.critical(
+                    "\n" + "="*80 + "\n" +
+                    "♻️  EXISTING DOCUMENT REUSED\n" +
+                    "="*80 + "\n" +
+                    f"Document ID: {result['document_id']}\n" +
+                    f"Original File: {result['metadata']['original_filename']}\n" +
+                    f"Stored Path: {result['stored_path']}\n" +
+                    f"Stage: {result['metadata']['stage']}\n" +
+                    "No duplicate created - using existing document\n" +
+                    "="*80
+                )
+            else:
+                logger.critical(
+                    "\n" + "="*80 + "\n" +
+                    "📄 NEW DOCUMENT CREATED\n" +
+                    "="*80 + "\n" +
+                    f"Document ID: {result['document_id']}\n" +
+                    f"Original File: {result['metadata']['original_filename']}\n" +
+                    f"Stored Path: {result['stored_path']}\n" +
+                    f"Size: {result['metadata']['size_bytes']:,} bytes\n" +
+                    "="*80
+                )
+            
             validated_documents.append({
                 "document_id": result["document_id"],
                 "original_filename": result["metadata"]["original_filename"],
@@ -195,7 +381,8 @@ def batch_validate_documents_tool(file_paths: List[str]) -> Dict[str, Any]:
                 "mime_type": f"application/{result['metadata']['extension'][1:]}",
                 "validation_status": "valid",
                 "validation_timestamp": result["metadata"]["uploaded_at"],
-                "stage": "intake"
+                "stage": "intake",
+                "reused_existing": result.get("reused_existing", False)
             })
         else:
             failed_documents.append({

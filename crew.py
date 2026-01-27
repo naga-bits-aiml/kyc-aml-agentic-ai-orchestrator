@@ -13,15 +13,19 @@ from langchain.llms.base import BaseLLM
 from tools.intake_tools import (
     validate_document_tool,
     batch_validate_documents_tool,
-    organize_case_documents_tool,
     link_document_to_case_tool,
     get_document_by_id_tool,
     list_documents_by_case_tool,
     list_all_documents_tool
 )
+from tools.pdf_conversion_tools import (
+    convert_pdf_to_images_tool,
+    check_pdf_conversion_needed_tool
+)
 from tools.classifier_tools import (
-    classify_document_tool,
-    batch_classify_documents_tool
+    get_classifier_api_info_tool,
+    make_classifier_api_request,
+    extract_document_file_path_tool
 )
 from tools.extraction_tools import (
     extract_text_from_pdf_tool,
@@ -32,7 +36,8 @@ from tools.stage_management_tools import (
     move_document_to_stage,
     get_documents_by_stage,
     get_stage_summary,
-    update_document_metadata_in_stage
+    update_document_metadata_in_stage,
+    update_document_metadata_tool
 )
 
 
@@ -73,9 +78,11 @@ class KYCAMLCrew:
             tools=[
                 validate_document_tool,
                 batch_validate_documents_tool,
-                organize_case_documents_tool,
+                convert_pdf_to_images_tool,
+                check_pdf_conversion_needed_tool,
                 move_document_to_stage,
-                get_stage_summary
+                get_stage_summary,
+                update_document_metadata_tool
             ],
             verbose=True,
             llm=self.llm,
@@ -91,11 +98,12 @@ class KYCAMLCrew:
         return Agent(
             config=self.agents_config['document_classifier_agent'],
             tools=[
-                classify_document_tool,
-                batch_classify_documents_tool,
-                move_document_to_stage,
-                get_documents_by_stage,
-                update_document_metadata_in_stage
+                get_classifier_api_info_tool,
+                make_classifier_api_request,
+                extract_document_file_path_tool,
+                convert_pdf_to_images_tool,
+                check_pdf_conversion_needed_tool,
+                update_document_metadata_tool
             ],
             verbose=True,
             llm=self.llm,
@@ -116,7 +124,7 @@ class KYCAMLCrew:
                 batch_extract_documents_tool,
                 move_document_to_stage,
                 get_documents_by_stage,
-                update_document_metadata_in_stage
+                update_document_metadata_tool
             ],
             verbose=True,
             llm=self.llm,

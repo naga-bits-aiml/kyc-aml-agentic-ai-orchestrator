@@ -6,63 +6,23 @@
 
 validate_documents_task:
   description: >
-    Validate and store the uploaded documents with globally unique IDs.
+    Validate and store documents with globally unique IDs.
     
-    Use the batch_validate_documents_tool with the following file paths: {file_paths}
+    Use batch_validate_documents_tool with file paths: {file_paths}
     
-    Perform the following:
-    1. Check file existence and accessibility
-    2. Verify file formats are supported (PDF, PNG, JPG, JPEG)
-    3. Validate file sizes (not empty, not too large >10MB)
-    4. Test file readability and integrity
-    5. Generate globally unique document IDs (format: DOC_YYYYMMDD_HHMMSS_XXXXX)
-    6. Store documents in documents/intake/ directory
-    7. Create metadata files for each document
+    Steps:
+    1. Call batch_validate_documents_tool - it handles validation, ID generation, and storage
+    2. Return the result immediately - DO NOT convert PDFs to images yet
+    3. PDF conversion will happen in classification stage if needed
     
-    IMPORTANT: 
-    - Use the exact file paths provided in {file_paths}
-    - Do not require or assume a case_id
-    - Documents can be linked to cases later using link_document_to_case_tool
-    - Each document gets a globally unique ID independent of any case
+    IMPORTANT: Just validate and store files. Return metadata only.
   
   expected_output: >
-    JSON object containing:
-    - validated_documents: List of validated document objects, each with:
-      - document_id: Globally unique identifier (e.g., DOC_20260127_143022_A3F8B)
-      - original_filename: Original file name
-      - stored_path: Path to stored file in intake directory
-      - file_size: Size in bytes
-      - mime_type: MIME type (application/pdf, image/png, etc.)
-      - validation_status: "valid" or "invalid"
-      - validation_timestamp: ISO 8601 timestamp
-      - stage: "intake"
-    - failed_documents: List of failed validations with issues
-    - summary:
-      - total: Total count
-      - valid: Number of valid documents
-      - invalid: Number of invalid documents
-  
-  agent: document_intake_agent
-
-organize_case_documents_task:
-  description: >
-    Organize validated documents into the proper case folder structure for case {case_id}.
-    
-    Tasks:
-    1. Create/verify case directory structure:
-       - documents/cases/{case_id}/intake/
-       - documents/cases/{case_id}/processed/
-       - documents/cases/{case_id}/extracted/
-    2. Move validated documents to appropriate folders
-    3. Create or update doc_metadata.json with file mappings
-    4. Log all file operations
-  
-  expected_output: >
-    JSON object with:
-    - case_id: Case identifier
-    - folder_structure: Created directory paths
-    - file_operations: List of file moves/copies performed
-    - metadata_updated: Boolean indicating metadata file status
+    JSON with:
+    - validated_documents: [{document_id, original_filename, stored_path, file_size, 
+      mime_type, validation_status}]
+    - failed_documents: [{file_path, issues}]
+    - summary: {total, valid, invalid}
   
   agent: document_intake_agent
 
@@ -70,60 +30,42 @@ organize_case_documents_task:
 
 classify_documents_task:
   description: >
-    Classify each validated document for case {case_id} into one of the following categories:
+    Classify documents using API discovery and generic REST API tools.
     
-    Categories:
-    - identity_proof: Passports, driver's licenses, national ID cards, resident permits
-    - address_proof: Utility bills, bank statements, lease agreements, government correspondence
-    - financial_statement: Income proof, tax returns, pay stubs, financial reports
-    - other: Any document not fitting the above categories
+    Categories: identity_proof, address_proof, financial_statement, other
     
-    Classification Process:
-    1. Analyze document content (text and visual features)
-    2. Use filename as a hint but not the sole determinant
-    3. Leverage extracted text if available
-    4. Consider document structure and formatting
-    5. Assign confidence score (0.0 to 1.0)
-    6. Flag low-confidence classifications (<0.6) for human review
+    Process:
+    1. FOR EACH DOCUMENT - Check if PDF conversion is needed:
+       a. Call check_pdf_conversion_needed_tool(document_id) to check if it's a PDF
+       b. ONLY IF needs_conversion=true: Call convert_pdf_to_images_tool(document_id)
+       c. IMPORTANT: Do NOT convert image files (jpg, png, etc.) - they are already images!
+       d. If PDF was converted, classify the child image documents, not the PDF
+    2. FOR EACH DOCUMENT TO CLASSIFY (original images or converted PDF images):
+       a. Call get_classifier_api_info_tool() to discover available API endpoints
+       b. Call extract_document_file_path_tool(document) to get the file path
+       c. Call make_classifier_api_request(endpoint_path="/", method="POST", file_path=...) to classify
+       d. Parse the API response to get predicted_class and confidence
+    3. Update metadata for EACH document using update_document_metadata_tool:
+       update_document_metadata_tool(
+         document_id="DOC_...",
+         stage_name="classification",
+         status="success" or "fail",
+         msg="Document classified as Passport" or error description,
+         additional_data={
+           "document_type": "Passport",
+           "confidence": 0.95,
+           "categories": ["identity_proof"],
+           "requires_review": false,
+           "api_response": <full raw API response dict>
+         }
+       )
     
-    Documents to classify: {documents}
-  
-  expected_output: >
-    JSON object containing:
-    - classifications: List of classification results, each with:
-      - document_id: Document identifier
-      - predicted_class: One of the four categories
-      - confidence_score: Float between 0.0 and 1.0
-      - reasoning: Brief explanation of classification decision
-      - requires_review: Boolean (true if confidence < 0.6)
-      - alternative_classes: List of other possible classes with scores
-    - summary:
-      - total_classified: Total documents processed
-      - high_confidence_count: Classifications above 0.8
-      - medium_confidence_count: Classifications 0.6-0.8
-      - low_confidence_count: Classifications below 0.6
-      - case_id: Case identifier
-  
-  agent: document_classifier_agent
-
-batch_classify_documents_task:
-  description: >
-    Perform batch classification of multiple documents for case {case_id} using 
-    optimized processing strategies.
-    
-    Strategy:
-    1. Group similar documents for batch API calls
-    2. Use extracted text when available to improve accuracy
-    3. Implement parallel processing where appropriate
-    4. Apply consistent confidence thresholds
-    5. Generate comprehensive classification report
-    
-    Batch size: {batch_size}
     Documents: {documents}
   
   expected_output: >
-    Same format as classify_documents_task but optimized for batch processing with
-    additional metrics like processing_time_per_document and batch_processing_efficiency.
+    JSON with classifications array containing document_id, predicted_class, 
+    confidence_score, requires_review for each document, plus a summary with 
+    total count of classified documents.
   
   agent: document_classifier_agent
 
@@ -131,49 +73,84 @@ batch_classify_documents_task:
 
 extract_document_data_task:
   description: >
-    Extract structured data from {document_type} document for case {case_id}.
+    Extract structured data from classified documents using Google Vision API.
     
-    Extraction Requirements by Document Type:
+    Process (same pattern as classification):
+    1. Get documents in 'classification' stage using get_documents_by_stage("classification")
+    2. FOR EACH document:
+       a. Call extract_text_from_image_tool(file_path=stored_path) to get Vision API response
+       b. Vision API returns structured JSON: {success, text, confidence, word_count, char_count}
+       c. Parse the extracted text based on document_type from classification to identify fields:
+          
+          For Passport/Voter ID/Driving License (identity documents):
+          - Full name, Date of birth, Document number
+          - Issue date, Expiry date, Issuing authority
+          
+          For Address proof (utility bills, bank statements):
+          - Full name, Complete address
+          - Document date, Issuing organization
+          
+          For PAN/Aadhar:
+          - Name, ID number, Date of birth
+       
+       d. Update metadata using update_document_metadata_tool:
+          update_document_metadata_tool(
+            document_id="DOC_...",
+            stage_name="extraction",
+            status="success" or "fail",
+            msg="Successfully extracted structured fields from document" or error description,
+            additional_data={
+              "extracted_fields": {
+                "name": "John Doe",
+                "document_number": "A12345678",
+                "dob": "1990-01-01",
+                ...
+              },
+              "raw_text": full_extracted_text,
+              "confidence": vision_api_confidence,
+              "word_count": word_count,
+              "extraction_quality": calculated_quality_score,
+              "fields_found": ["name", "document_number", "dob"],
+              "fields_missing": ["expiry_date"],
+              "vision_api_response": <full Vision API response>
+            }
+          )
     
-    For identity_proof documents:
-    - Full name (first, middle, last)
-    - Date of birth
-    - Document number (passport number, license number, etc.)
-    - Issue date and expiry date
-    - Issuing authority/country
-    - Photo (if extractable)
-    
-    For address_proof documents:
-    - Full name
-    - Complete address (street, city, state/province, postal code, country)
-    - Document date/billing period
-    - Issuing organization
-    
-    For financial_statement documents:
-    - Account holder name
-    - Account number (partially masked if needed)
-    - Statement period
-    - Key financial figures (income, balance, etc.)
-    - Issuing institution
-    
-    Process:
-    1. Use OCR API to extract text from document: {document_path}
-    2. Parse extracted text to identify relevant fields
-    3. Validate extracted data against expected patterns
-    4. Calculate confidence scores for each field
-    5. Flag fields with low confidence for review
+    IMPORTANT:
+    - Vision API provides raw text and confidence
+    - Your job is to parse the text and extract structured fields based on document_type
+    - Use document_type from classification to know what fields to look for
+    - Mark extraction quality based on how many expected fields were found
   
   expected_output: >
-    JSON object containing:
-    - document_id: Document identifier
-    - document_type: Type of document
-    - extracted_data: Dictionary of field-value pairs specific to document type
-    - field_confidence: Dictionary mapping each field to its confidence score
-    - extraction_quality: Overall quality score (0.0-1.0)
-    - requires_review: Boolean indicating if human review needed
-    - errors: List of any extraction errors or warnings
-    - extraction_timestamp: ISO 8601 timestamp
-    - ocr_engine_used: Name of OCR engine
+    JSON object with:
+    {
+      "extractions": [
+        {
+          "document_id": "DOC_xxx",
+          "document_type": "Passport",
+          "success": true,
+          "extracted_fields": {
+            "name": "John Doe",
+            "document_number": "A12345678",
+            "dob": "1990-01-01",
+            "issue_date": "2020-01-01",
+            "expiry_date": "2030-01-01"
+          },
+          "raw_text": "full text from vision api",
+          "confidence": 0.95,
+          "extraction_quality": 0.90,
+          "fields_found": 5,
+          "fields_missing": 0
+        }
+      ],
+      "summary": {
+        "total": 5,
+        "successful": 4,
+        "failed": 1,
+        "average_quality": 0.88
+      }
+    }
   
   agent: document_extraction_agent
 

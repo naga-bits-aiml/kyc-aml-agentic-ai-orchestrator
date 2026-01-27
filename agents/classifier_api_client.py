@@ -1,21 +1,33 @@
-"""API client for KYC-AML Document Classifier service."""
-import requests
-import tempfile
-from pathlib import Path
-from typing import Dict, Any, Optional, List
-from tenacity import retry, stop_after_attempt, wait_exponential
-from utilities import config, settings, logger
+"""
+Production-Grade REST API Client for KYC-AML Document Classifier Service.
 
-try:
-    from pdf2image import convert_from_path
-    PDF2IMAGE_AVAILABLE = True
-except ImportError:
-    PDF2IMAGE_AVAILABLE = False
-    logger.warning("pdf2image not available. PDF conversion will be skipped.")
+This module provides comprehensive logging for all API interactions including:
+- Request/response logging with full details
+- Classification predictions with confidence scores
+- Performance metrics
+- Error handling and retry logic
+"""
+import requests
+from pathlib import Path
+from typing import Dict, Any, Optional
+from tenacity import retry, stop_after_attempt, wait_exponential
+import time
+from utilities import config, logger
 
 
 class ClassifierAPIClient:
-    """Client for interacting with the KYC-AML Document Classifier API."""
+    """
+    Production-Grade REST API Client for KYC-AML Document Classifier.
+    
+    Uses the /predict endpoint for document classification with comprehensive logging.
+    
+    Features:
+    - Direct /predict endpoint usage
+    - Comprehensive request/response logging
+    - Detailed classification prediction logging
+    - Retry logic with exponential backoff
+    - Performance metrics tracking
+    """
     
     def __init__(
         self,
@@ -28,61 +40,31 @@ class ClassifierAPIClient:
         
         Args:
             base_url: Base URL of the classifier API
-            api_key: API key for authentication
+            api_key: API key for authentication (if required)
             timeout: Request timeout in seconds
         """
-        self.base_url = base_url or config.classifier_api_url
+        self.base_url = (base_url or config.classifier_api_url).rstrip('/')
         self.api_key = api_key or config.classifier_api_key
         self.timeout = timeout or config.classifier_timeout
         self.session = requests.Session()
         
         if self.api_key:
             self.session.headers.update({
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
+                "Authorization": f"Bearer {self.api_key}"
             })
-    
-    def _convert_pdf_to_image(self, pdf_path: str) -> Optional[str]:
-        """
-        Convert PDF to image (first page) for classification.
         
-        Args:
-            pdf_path: Path to the PDF file
-            
-        Returns:
-            Path to the temporary image file, or None if conversion fails
-        """
-        if not PDF2IMAGE_AVAILABLE:
-            logger.warning("pdf2image not available. Cannot convert PDF to image.")
-            return None
-        
-        try:
-            logger.info(f"Converting PDF to image for classification: {pdf_path}")
-            
-            # Convert first page to image
-            images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=200)
-            
-            if not images:
-                logger.error(f"No images extracted from PDF: {pdf_path}")
-                return None
-            
-            # Save to temporary file
-            temp_dir = Path(tempfile.gettempdir()) / "kyc_classifier_temp"
-            temp_dir.mkdir(exist_ok=True)
-            
-            temp_image_path = temp_dir / f"{Path(pdf_path).stem}_page1.jpg"
-            images[0].save(str(temp_image_path), 'JPEG', quality=85)
-            
-            logger.info(f"PDF converted to image: {temp_image_path}")
-            return str(temp_image_path)
-            
-        except Exception as e:
-            logger.error(f"Error converting PDF to image: {str(e)}")
-            return None
-    
-    def _should_convert_to_image(self, file_path: str) -> bool:
-        """Check if file should be converted to image before classification."""
-        return Path(file_path).suffix.lower() == '.pdf'
+        # Log initialization with critical details
+        logger.critical(
+            "="*80 + "\n" +
+            "🔧 CLASSIFIER API CLIENT INITIALIZED\n" +
+            "="*80 + "\n" +
+            f"Base URL: {self.base_url}\n" +
+            f"Endpoint: {self.base_url}/predict\n" +
+            f"Timeout: {self.timeout}s\n" +
+            f"API Key: {'Configured' if self.api_key else 'Not configured'}\n" +
+            "Supported: Aadhar, Driving License, PAN Card, Passport, Voter ID\n" +
+            "="*80
+        )
     
     @retry(
         stop=stop_after_attempt(3),
@@ -94,134 +76,111 @@ class ClassifierAPIClient:
         metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Classify a single document using the KYC document classifier API.
+        Classify a single document using the KYC document classifier /predict API.
         
-        Automatically converts PDFs to images before sending to the API.
+        This method includes comprehensive logging of:
+        - API request details (method, URL, file info)
+        - Classification predictions with confidence scores
+        - All class probabilities
+        - Performance metrics (duration, file size)
+        - Error conditions with full context
         
-        API Endpoint: http://35.184.130.36/api/kyc_document_classifier/v1/
+        API Endpoint: {base_url}/predict
+        Method: POST
+        Content-Type: multipart/form-data
         
         Args:
-            file_path: Path to the document file
+            file_path: Path to the document file (image: JPEG, PNG, BMP, TIFF)
             metadata: Optional document metadata
             
         Returns:
-            Classification result from the API
+            Classification result from the API containing:
+            - predicted_class: Document type (Aadhar, Driving License, PAN Card, Passport, Voter ID)
+            - confidence: Confidence score (0.0-1.0)
+            - probabilities: Dict of all class probabilities
+            - success: Whether prediction succeeded
+            
+        Raises:
+            FileNotFoundError: If the file doesn't exist
+            requests.exceptions.RequestException: If API call fails
         """
-        # API expects files to be posted to the base URL
-        url = self.base_url
+        file_path = Path(file_path)
+        start_time = time.time()
         
-        # Convert PDF to image if needed
-        classification_file = file_path
-        temp_image = None
+        # Validate file exists
+        if not file_path.exists():
+            error_msg = f"File not found: {file_path}"
+            logger.error(f"❌ {error_msg}")
+            raise FileNotFoundError(error_msg)
         
-        if self._should_convert_to_image(file_path):
-            logger.info(f"PDF detected, converting to image for classification: {file_path}")
-            temp_image = self._convert_pdf_to_image(file_path)
-            if temp_image:
-                classification_file = temp_image
-                logger.info(f"Using converted image for classification: {classification_file}")
-            else:
-                logger.warning(f"PDF conversion failed, attempting with original file: {file_path}")
+        # Prepare API request to /predict endpoint
+        url = f"{self.base_url}/predict"
+        file_size = file_path.stat().st_size
+        
+        # Log API request with full details
+        logger.critical(
+            "\n" + "="*80 + "\n" +
+            "🌐 API REQUEST: Document Classification\n" +
+            "="*80 + "\n" +
+            f"Method: POST\n" +
+            f"URL: {url}\n" +
+            f"File: {file_path.name}\n" +
+            f"Path: {file_path}\n" +
+            f"Size: {file_size:,} bytes ({file_size/1024:.2f} KB)\n" +
+            f"Extension: {file_path.suffix}\n" +
+            "="*80
+        )
         
         try:
-            with open(classification_file, 'rb') as f:
-                files = {'file': f}
-                data = {'metadata': str(metadata)} if metadata else {}
+            with open(file_path, 'rb') as f:
+                files = {'file': (file_path.name, f, 'application/octet-stream')}
                 
                 response = self.session.post(
                     url,
                     files=files,
-                    data=data,
                     timeout=self.timeout
                 )
                 response.raise_for_status()
                 
                 result = response.json()
-                logger.info(f"Document classified successfully: {file_path}")
+                duration = time.time() - start_time
+                
+                # Extract prediction details
+                predicted_class = result.get('predicted_class', 'unknown')
+                confidence = result.get('confidence', 0.0)
+                probabilities = result.get('probabilities', {})
+                success = result.get('success', True)
+                
+                # Log the classification prediction with ALL details
+                logger.critical(
+                    "\n" + "="*80 + "\n" +
+                    "🎯 CLASSIFIER PREDICTION RESULT\n" +
+                    "="*80 + "\n" +
+                    f"Document: {file_path.name}\n" +
+                    f"Predicted Class: {predicted_class}\n" +
+                    f"Confidence: {confidence:.2%}\n" +
+                    f"Success: {success}\n" +
+                    f"Duration: {duration:.3f}s\n" +
+                    "All Probabilities:\n" +
+                    "\n".join([f"  - {cls}: {prob:.2%}" for cls, prob in sorted(probabilities.items(), key=lambda x: x[1], reverse=True)]) + "\n" +
+                    "="*80
+                )
+                
                 return result
                 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error classifying document {file_path}: {str(e)}")
-            raise
-        
-        finally:
-            # Clean up temporary image file
-            if temp_image and Path(temp_image).exists():
-                try:
-                    Path(temp_image).unlink()
-                    logger.debug(f"Cleaned up temporary image: {temp_image}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean up temporary image {temp_image}: {e}")
-    
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
-    )
-    def batch_classify(
-        self,
-        documents: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """
-        Classify multiple documents in a batch.
-        
-        Args:
-            documents: List of documents with file paths and metadata
-            
-        Returns:
-            Batch classification results
-        """
-        # For batch processing, may need adjustment based on API specification
-        url = self.base_url
-        
-        try:
-            files = []
-            for idx, doc in enumerate(documents):
-                files.append(
-                    (f'file_{idx}', open(doc['file_path'], 'rb'))
-                )
-            
-            response = self.session.post(
-                url,
-                files=files,
-                timeout=self.timeout * len(documents)  # Adjust timeout for batch
+            duration = time.time() - start_time
+            logger.error(
+                f"\n" + "="*80 + "\n" +
+                f"❌ CLASSIFICATION FAILED\n" +
+                "="*80 + "\n" +
+                f"File: {file_path.name}\n" +
+                f"URL: {url}\n" +
+                f"Duration: {duration:.3f}s\n" +
+                f"Error Type: {type(e).__name__}\n" +
+                f"Error: {str(e)}\n" +
+                "="*80
             )
-            response.raise_for_status()
-            
-            # Close all file handles
-            for _, file_handle in files:
-                file_handle.close()
-            
-            result = response.json()
-            logger.info(f"Batch classification completed for {len(documents)} documents")
-            return result
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error in batch classification: {str(e)}")
-            # Ensure files are closed even on error
-            for _, file_handle in files:
-                if not file_handle.closed:
-                    file_handle.close()
-            raise
-    
-    def get_classification_info(self, classification_id: str) -> Dict[str, Any]:
-        """
-        Get information about a previous classification.
-        
-        Args:
-            classification_id: ID of the classification
-            
-        Returns:
-            Classification information
-        """
-        url = f"{self.base_url}/classifications/{classification_id}"
-        
-        try:
-            response = self.session.get(url, timeout=self.timeout)
-            response.raise_for_status()
-            return response.json()
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error getting classification info: {str(e)}")
             raise
     
     def health_check(self) -> bool:
@@ -231,11 +190,36 @@ class ClassifierAPIClient:
         Returns:
             True if API is healthy, False otherwise
         """
-        # Try base URL for health check
-        url = self.base_url
-        
         try:
-            response = self.session.get(url, timeout=5)
-            return response.status_code == 200
-        except requests.exceptions.RequestException:
+            logger.info(f"🏥 Performing API health check: {self.base_url}/predict")
+            response = self.session.get(f"{self.base_url}/predict", timeout=5)
+            is_healthy = response.status_code in [200, 405]  # 405 = Method Not Allowed (GET on POST endpoint is OK)
+            
+            if is_healthy:
+                logger.info(f"✅ API health check passed (status: {response.status_code})")
+            else:
+                logger.warning(f"⚠️ API health check failed (status: {response.status_code})")
+            
+            return is_healthy
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ API health check failed: {str(e)}")
             return False
+    
+    def get_api_info(self) -> Dict[str, Any]:
+        """
+        Get API information for external tools.
+        
+        Returns:
+            Dictionary with API configuration and capabilities
+        """
+        return {
+            "base_url": self.base_url,
+            "endpoint": "/predict",
+            "full_url": f"{self.base_url}/predict",
+            "method": "POST",
+            "timeout": self.timeout,
+            "description": "Classify Indian identity documents",
+            "supported_classes": ["Aadhar", "Driving License", "PAN Card", "Passport", "Voter ID"],
+            "supported_formats": ["image/jpeg", "image/png", "image/bmp", "image/tiff"],
+            "content_type": "multipart/form-data"
+        }
