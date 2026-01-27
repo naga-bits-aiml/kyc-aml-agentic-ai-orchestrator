@@ -1,9 +1,11 @@
 # Core dependencies (runtime)
 crewai==1.8.1
-langchain==1.2.6
+langchain==0.3.27
+langchain-core==1.2.7
 langchain-openai==1.1.7
 langchain-community==0.4.1
 langchain-google-genai==4.2.0
+google-genai==1.59.0
 
 # HTTP and API
 requests==2.32.3

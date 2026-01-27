@@ -1,40 +1,47 @@
 # KYC-AML Agentic AI Orchestrator
 
-An intelligent multi-agent system for processing KYC (Know Your Customer) and AML (Anti-Money Laundering) documents using CrewAI and Large Language Models.
+An intelligent multi-agent system for processing KYC (Know Your Customer) and AML (Anti-Money Laundering) documents using **pure CrewAI** framework and Large Language Models.
 
 ## 🌟 Features
 
-- **Multi-Agent Architecture**: Coordinated agents working together for document processing
-- **Document Intake Agent**: Validates and prepares documents for processing
-- **Document Classifier Agent**: Classifies documents using an external classifier API
-- **Interactive Chat Interfaces**: CLI and Web-based chat for user interaction
+- **Pure CrewAI Architecture**: Native CrewAI agents with tool-based workflows
+- **Intelligent Document Processing**: Automated intake, classification, and extraction
+- **Smart PDF Handling**: Automatic PDF-to-image conversion for API compatibility
+- **Interactive Interfaces**: CLI and Web-based chat for user interaction
 - **Flexible LLM Support**: Works with OpenAI GPT-4, Azure OpenAI, Anthropic Claude, or local models
-- **Batch Processing**: Efficient processing of multiple documents
-- **CrewAI Orchestration**: Advanced agent coordination and workflow management
+- **Event-Driven Flows**: CrewAI Flow pattern for workflow orchestration
+- **Case Management**: Organized document storage with metadata tracking
 - **Robust Error Handling**: Retry logic and comprehensive error reporting
 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  KYC-AML Orchestrator                        │
-│                                                               │
-│  ┌────────────────────┐      ┌────────────────────┐        │
-│  │ Document Intake    │──────▶│ Document Classifier│        │
-│  │ Agent              │      │ Agent              │        │
-│  │                    │      │                    │        │
-│  │ • Validates files  │      │ • Calls API        │        │
-│  │ • Checks format    │      │ • Classifies docs  │        │
-│  │ • Creates metadata │      │ • Returns results  │        │
-│  └────────────────────┘      └────────────────────┘        │
-│                                        │                     │
-│                                        ▼                     │
-│                          ┌──────────────────────┐           │
-│                          │ Classifier API       │           │
-│                          │ (External Service)   │           │
-│                          └──────────────────────┘           │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│               CrewAI Flow Orchestration                       │
+│                                                                │
+│  ┌──────────────────┐    ┌──────────────────┐               │
+│  │ Document Intake  │───▶│   Classifier     │               │
+│  │ Agent            │    │   Agent          │               │
+│  │                  │    │                  │               │
+│  │ Tools:           │    │ Tools:           │               │
+│  │ • Validate       │    │ • Classify       │               │
+│  │ • Organize       │    │ • PDF→Image      │               │
+│  └──────────────────┘    └──────────────────┘               │
+│           │                        │                         │
+│           └────────────┬───────────┘                        │
+│                        ▼                                     │
+│              ┌──────────────────┐                           │
+│              │  Extraction      │                           │
+│              │  Agent           │                           │
+│              │                  │                           │
+│              │  Tools:          │                           │
+│              │  • OCR Extract   │                           │
+│              │  • Batch Process │                           │
+│              └──────────────────┘                           │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+> **See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed documentation.**
 
 ## 📋 Prerequisites
 

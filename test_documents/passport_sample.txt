@@ -1,0 +1,32 @@
+PASSPORT
+=====================================
+
+Personal Information
+-------------------
+Full Name: John Michael Smith
+Date of Birth: 15 March 1985
+Place of Birth: London, United Kingdom
+Nationality: British
+Gender: Male
+
+Passport Details
+-------------------
+Passport Number: GB123456789
+Issue Date: 01 January 2020
+Expiry Date: 01 January 2030
+Issuing Authority: UK Passport Office
+
+Address
+-------------------
+123 Baker Street
+London, W1U 6TN
+United Kingdom
+
+Emergency Contact
+-------------------
+Name: Sarah Smith
+Relationship: Spouse
+Phone: +44 20 7946 0958
+
+Document Authenticity Code: XJ9-2K4-LP7-M3Q
+This document contains sensitive personal information

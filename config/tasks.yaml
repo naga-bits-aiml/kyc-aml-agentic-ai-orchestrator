@@ -1,0 +1,275 @@
+# KYC-AML Task Definitions
+# These configurations define tasks, their descriptions, expected outputs, and agent assignments
+# Parameters can be injected using {parameter_name} syntax
+
+# ==================== INTAKE TASKS ====================
+
+validate_documents_task:
+  description: >
+    Validate the uploaded documents for case {case_id}.
+    
+    Use the batch_validate_documents_tool with the following file paths: {file_paths}
+    
+    Perform the following validations:
+    1. Check file existence and accessibility
+    2. Verify file formats are supported (PDF, PNG, JPG, JPEG)
+    3. Validate file sizes (not empty, not too large >10MB)
+    4. Test file readability and integrity
+    5. Convert PDFs to images if needed
+    6. Generate unique document IDs
+    7. Create metadata for each valid document
+    
+    IMPORTANT: Use the exact file paths provided in {file_paths}. Do not fabricate or assume file paths.
+    
+    Move validated documents to the processing queue and update case metadata.
+    Flag any documents that fail validation with specific error reasons.
+  
+  expected_output: >
+    JSON object containing:
+    - validated_documents: List of validated document objects, each with:
+      - document_id: Unique identifier (UUID)
+      - original_filename: Original file name
+      - file_path: Path to validated file
+      - file_size: Size in bytes
+      - mime_type: MIME type (application/pdf, image/png, etc.)
+      - validation_status: "valid" or "invalid"
+      - validation_timestamp: ISO 8601 timestamp
+      - error_message: If invalid, the specific error
+    - summary:
+      - total_documents: Total count
+      - valid_count: Number of valid documents
+      - invalid_count: Number of invalid documents
+      - case_id: The case identifier
+  
+  agent: document_intake_agent
+
+organize_case_documents_task:
+  description: >
+    Organize validated documents into the proper case folder structure for case {case_id}.
+    
+    Tasks:
+    1. Create/verify case directory structure:
+       - documents/cases/{case_id}/intake/
+       - documents/cases/{case_id}/processed/
+       - documents/cases/{case_id}/extracted/
+    2. Move validated documents to appropriate folders
+    3. Create or update doc_metadata.json with file mappings
+    4. Log all file operations
+  
+  expected_output: >
+    JSON object with:
+    - case_id: Case identifier
+    - folder_structure: Created directory paths
+    - file_operations: List of file moves/copies performed
+    - metadata_updated: Boolean indicating metadata file status
+  
+  agent: document_intake_agent
+
+# ==================== CLASSIFICATION TASKS ====================
+
+classify_documents_task:
+  description: >
+    Classify each validated document for case {case_id} into one of the following categories:
+    
+    Categories:
+    - identity_proof: Passports, driver's licenses, national ID cards, resident permits
+    - address_proof: Utility bills, bank statements, lease agreements, government correspondence
+    - financial_statement: Income proof, tax returns, pay stubs, financial reports
+    - other: Any document not fitting the above categories
+    
+    Classification Process:
+    1. Analyze document content (text and visual features)
+    2. Use filename as a hint but not the sole determinant
+    3. Leverage extracted text if available
+    4. Consider document structure and formatting
+    5. Assign confidence score (0.0 to 1.0)
+    6. Flag low-confidence classifications (<0.6) for human review
+    
+    Documents to classify: {documents}
+  
+  expected_output: >
+    JSON object containing:
+    - classifications: List of classification results, each with:
+      - document_id: Document identifier
+      - predicted_class: One of the four categories
+      - confidence_score: Float between 0.0 and 1.0
+      - reasoning: Brief explanation of classification decision
+      - requires_review: Boolean (true if confidence < 0.6)
+      - alternative_classes: List of other possible classes with scores
+    - summary:
+      - total_classified: Total documents processed
+      - high_confidence_count: Classifications above 0.8
+      - medium_confidence_count: Classifications 0.6-0.8
+      - low_confidence_count: Classifications below 0.6
+      - case_id: Case identifier
+  
+  agent: document_classifier_agent
+
+batch_classify_documents_task:
+  description: >
+    Perform batch classification of multiple documents for case {case_id} using 
+    optimized processing strategies.
+    
+    Strategy:
+    1. Group similar documents for batch API calls
+    2. Use extracted text when available to improve accuracy
+    3. Implement parallel processing where appropriate
+    4. Apply consistent confidence thresholds
+    5. Generate comprehensive classification report
+    
+    Batch size: {batch_size}
+    Documents: {documents}
+  
+  expected_output: >
+    Same format as classify_documents_task but optimized for batch processing with
+    additional metrics like processing_time_per_document and batch_processing_efficiency.
+  
+  agent: document_classifier_agent
+
+# ==================== EXTRACTION TASKS ====================
+
+extract_document_data_task:
+  description: >
+    Extract structured data from {document_type} document for case {case_id}.
+    
+    Extraction Requirements by Document Type:
+    
+    For identity_proof documents:
+    - Full name (first, middle, last)
+    - Date of birth
+    - Document number (passport number, license number, etc.)
+    - Issue date and expiry date
+    - Issuing authority/country
+    - Photo (if extractable)
+    
+    For address_proof documents:
+    - Full name
+    - Complete address (street, city, state/province, postal code, country)
+    - Document date/billing period
+    - Issuing organization
+    
+    For financial_statement documents:
+    - Account holder name
+    - Account number (partially masked if needed)
+    - Statement period
+    - Key financial figures (income, balance, etc.)
+    - Issuing institution
+    
+    Process:
+    1. Use OCR API to extract text from document: {document_path}
+    2. Parse extracted text to identify relevant fields
+    3. Validate extracted data against expected patterns
+    4. Calculate confidence scores for each field
+    5. Flag fields with low confidence for review
+  
+  expected_output: >
+    JSON object containing:
+    - document_id: Document identifier
+    - document_type: Type of document
+    - extracted_data: Dictionary of field-value pairs specific to document type
+    - field_confidence: Dictionary mapping each field to its confidence score
+    - extraction_quality: Overall quality score (0.0-1.0)
+    - requires_review: Boolean indicating if human review needed
+    - errors: List of any extraction errors or warnings
+    - extraction_timestamp: ISO 8601 timestamp
+    - ocr_engine_used: Name of OCR engine
+  
+  agent: document_extraction_agent
+
+batch_extract_documents_task:
+  description: >
+    Extract data from multiple documents in batch for case {case_id}.
+    
+    Batch processing strategy:
+    1. Group documents by type for consistent extraction
+    2. Use appropriate OCR API for each document type
+    3. Implement parallel processing where possible
+    4. Aggregate results with quality metrics
+    5. Generate extraction summary report
+    
+    Documents to process: {documents}
+    Priority: {priority}
+  
+  expected_output: >
+    JSON object containing:
+    - extractions: List of individual extraction results (same format as extract_document_data_task)
+    - summary:
+      - total_documents: Count of documents processed
+      - successful_extractions: Count of successful extractions
+      - failed_extractions: Count of failed extractions
+      - average_quality_score: Mean extraction quality across all documents
+      - total_processing_time: Time taken for batch
+      - case_id: Case identifier
+  
+  agent: document_extraction_agent
+
+# ==================== WORKFLOW COORDINATION TASKS ====================
+
+orchestrate_workflow_task:
+  description: >
+    Orchestrate the complete document processing workflow for case {case_id}.
+    
+    Workflow stages:
+    1. Document intake and validation
+    2. Document classification
+    3. Data extraction
+    4. Quality validation and review
+    5. Result aggregation and reporting
+    
+    Coordination responsibilities:
+    - Monitor progress of each stage
+    - Handle errors and retries
+    - Maintain workflow state
+    - Coordinate between specialized agents
+    - Make decisions about workflow progression
+    - Escalate issues requiring human intervention
+    
+    Input documents: {file_paths}
+  
+  expected_output: >
+    JSON object containing:
+    - case_id: Case identifier
+    - workflow_status: "completed", "partial", or "failed"
+    - stages_completed: List of completed workflow stages
+    - intake_results: Results from intake stage
+    - classification_results: Results from classification stage
+    - extraction_results: Results from extraction stage
+    - quality_metrics:
+      - overall_quality_score: 0.0-1.0
+      - documents_requiring_review: Count
+      - processing_time: Total time in seconds
+    - errors: List of any errors encountered
+    - recommendations: Suggested next steps or actions
+  
+  agent: supervisor_agent
+
+validate_and_report_task:
+  description: >
+    Validate all processing results for case {case_id} and generate comprehensive report.
+    
+    Validation checks:
+    1. Verify all documents were processed
+    2. Check data completeness for each document
+    3. Validate field consistency across documents
+    4. Identify any data quality issues
+    5. Check compliance with KYC/AML requirements
+    
+    Report generation:
+    1. Create summary of all processed documents
+    2. Highlight documents requiring review
+    3. List extracted key information
+    4. Include quality metrics
+    5. Provide recommendations for case progression
+  
+  expected_output: >
+    Comprehensive JSON report with:
+    - case_summary: Overview of case processing
+    - document_inventory: List of all documents with status
+    - extracted_information: Consolidated data from all documents
+    - quality_assessment: Quality metrics and scores
+    - compliance_checklist: KYC/AML requirement coverage
+    - review_required: List of items needing human review
+    - recommendations: Next steps for case handling
+    - report_timestamp: ISO 8601 timestamp
+  
+  agent: supervisor_agent

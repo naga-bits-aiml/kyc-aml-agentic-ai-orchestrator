@@ -1,6 +1,6 @@
 {
   "llm": {
-    "provider": "openai",
+    "provider": "google",
     "openai": {
       "api_key": "${OPENAI_API_KEY}",
       "model": "gpt-4o-mini",
@@ -26,6 +26,86 @@
     "ollama": {
       "base_url": "http://localhost:11434",
       "model": "llama2"
+    },
+    "available_models": {
+      "google": [
+        {
+          "name": "gemini-2.5-flash",
+          "description": "Fastest Gemini model, optimized for speed and efficiency",
+          "context_window": 1000000
+        },
+        {
+          "name": "gemini-2.0-flash",
+          "description": "Fast Gemini model, good balance of speed and capability",
+          "context_window": 1000000
+        },
+        {
+          "name": "gemini-1.5-pro",
+          "description": "Advanced reasoning and longer context",
+          "context_window": 2000000
+        },
+        {
+          "name": "gemini-1.5-flash",
+          "description": "Fast and versatile for scaled deployments",
+          "context_window": 1000000
+        }
+      ],
+      "openai": [
+        {
+          "name": "gpt-4o",
+          "description": "Most capable GPT-4 model, multimodal",
+          "context_window": 128000
+        },
+        {
+          "name": "gpt-4o-mini",
+          "description": "Affordable and fast GPT-4 level intelligence",
+          "context_window": 128000
+        },
+        {
+          "name": "gpt-4-turbo",
+          "description": "GPT-4 Turbo with vision capabilities",
+          "context_window": 128000
+        },
+        {
+          "name": "gpt-3.5-turbo",
+          "description": "Fast, inexpensive model for simple tasks",
+          "context_window": 16385
+        }
+      ],
+      "anthropic": [
+        {
+          "name": "claude-3-opus-20240229",
+          "description": "Most capable Claude model for complex tasks",
+          "context_window": 200000
+        },
+        {
+          "name": "claude-3-sonnet-20240229",
+          "description": "Balanced performance and speed",
+          "context_window": 200000
+        },
+        {
+          "name": "claude-3-haiku-20240307",
+          "description": "Fastest and most compact Claude model",
+          "context_window": 200000
+        }
+      ],
+      "ollama": [
+        {
+          "name": "llama2",
+          "description": "Meta's Llama 2 - Open source, runs locally",
+          "context_window": 4096
+        },
+        {
+          "name": "mistral",
+          "description": "Mistral 7B - Fast and capable open model",
+          "context_window": 8192
+        },
+        {
+          "name": "codellama",
+          "description": "Code-specialized Llama model",
+          "context_window": 16384
+        }
+      ]
     }
   }
 }

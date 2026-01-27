@@ -1,7 +1,10 @@
 """CrewAI tools for document text extraction."""
+from crewai.tools import tool
 from pathlib import Path
 import mimetypes
-from typing import Dict, Any
+from typing import Dict, Any, List
+from agents.ocr_api_client import OCRAPIClient
+from utilities import logger
 
 
 def analyze_document_type(file_path: str) -> str:
@@ -118,4 +121,134 @@ def get_document_info(file_path: str) -> Dict[str, Any]:
         "size_mb": round(file_path.stat().st_size / (1024 * 1024), 2),
         "mime_type": mime_type or "unknown",
         "exists": True
+    }
+
+
+# Initialize OCR client
+_ocr_client = None
+
+def get_ocr_client():
+    """Get or create OCR API client."""
+    global _ocr_client
+    if _ocr_client is None:
+        _ocr_client = OCRAPIClient()
+    return _ocr_client
+
+
+@tool("Extract Text from PDF")
+def extract_text_from_pdf_tool(file_path: str) -> Dict[str, Any]:
+    """
+    Extract text from a PDF document using OCR.
+    
+    Args:
+        file_path: Path to the PDF file
+        
+    Returns:
+        Dictionary with extraction results including:
+        - success: Boolean indicating success
+        - text: Extracted text content
+        - confidence: OCR confidence score
+    """
+    logger.info(f"Extracting text from PDF: {file_path}")
+    
+    try:
+        client = get_ocr_client()
+        result = client.process_document(file_path)
+        
+        return {
+            "success": True,
+            "file_path": file_path,
+            "extraction": result
+        }
+    except Exception as e:
+        logger.error(f"PDF extraction failed: {e}")
+        return {
+            "success": False,
+            "file_path": file_path,
+            "error": str(e)
+        }
+
+
+@tool("Extract Text from Image")
+def extract_text_from_image_tool(file_path: str) -> Dict[str, Any]:
+    """
+    Extract text from an image document using OCR.
+    
+    Args:
+        file_path: Path to the image file
+        
+    Returns:
+        Dictionary with extraction results including:
+        - success: Boolean indicating success
+        - text: Extracted text content
+        - confidence: OCR confidence score
+    """
+    logger.info(f"Extracting text from image: {file_path}")
+    
+    try:
+        client = get_ocr_client()
+        result = client.process_document(file_path)
+        
+        return {
+            "success": True,
+            "file_path": file_path,
+            "extraction": result
+        }
+    except Exception as e:
+        logger.error(f"Image extraction failed: {e}")
+        return {
+            "success": False,
+            "file_path": file_path,
+            "error": str(e)
+        }
+
+
+@tool("Batch Extract Documents")
+def batch_extract_documents_tool(file_paths: List[str]) -> Dict[str, Any]:
+    """
+    Extract text from multiple documents in batch.
+    
+    Args:
+        file_paths: List of document file paths to extract from
+        
+    Returns:
+        Dictionary with batch extraction results including:
+        - success: Boolean indicating overall success
+        - total: Total number of documents
+        - successful: Number of successful extractions
+        - failed: Number of failed extractions
+        - results: List of extraction results for each document
+    """
+    logger.info(f"Batch extracting {len(file_paths)} documents")
+    
+    results = []
+    successful = 0
+    failed = 0
+    
+    client = get_ocr_client()
+    
+    for file_path in file_paths:
+        try:
+            result = client.process_document(file_path)
+            results.append({
+                "success": True,
+                "file_path": file_path,
+                "extraction": result
+            })
+            successful += 1
+        except Exception as e:
+            results.append({
+                "success": False,
+                "file_path": file_path,
+                "error": str(e)
+            })
+            failed += 1
+            logger.error(f"Extraction failed for {file_path}: {e}")
+    
+    return {
+        "success": failed == 0,
+        "total": len(file_paths),
+        "successful": successful,
+        "failed": failed,
+        "results": results
     }

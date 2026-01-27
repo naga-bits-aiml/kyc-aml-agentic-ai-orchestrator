@@ -22,6 +22,13 @@ from .extraction_tools import (
     check_extraction_quality,
     get_document_info
 )
+from .stage_management_tools import (
+    move_document_to_stage,
+    get_documents_by_stage,
+    get_stage_summary,
+    add_document_to_case,
+    update_document_metadata_in_stage
+)
 
 # Lazy imports to avoid circular dependencies
 def _get_classifier_tools():

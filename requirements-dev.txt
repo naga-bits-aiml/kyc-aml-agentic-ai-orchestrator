@@ -7,5 +7,8 @@ black==24.10.0
 ruff==0.6.9
 mypy==1.10.0
 
+# Auto-reload for development
+watchdog>=3.0.0
+
 # Mock services for local testing (non-production)
 Flask==3.0.0

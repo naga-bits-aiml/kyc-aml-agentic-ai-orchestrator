@@ -1,11 +1,121 @@
 """Main entry point for KYC-AML Agentic AI Orchestrator."""
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import argparse
 import json
-from orchestrator import KYCAMLOrchestrator
+import uuid
+from datetime import datetime
+
+# Pure CrewAI orchestration
+from flows import kickoff_flow, FLOW_AVAILABLE
+from crew import KYCAMLCrew, process_documents
+
 from utilities import config, settings, logger
+
+
+def process_with_flow(
+    case_id: str,
+    document_paths: List[str],
+    model: str,
+    temperature: float = 0.1,
+    visualize: bool = False
+) -> dict:
+    """
+    Process documents using Flow-based CrewAI architecture.
+    
+    Args:
+        case_id: Case identifier
+        document_paths: List of document file paths
+        model: LLM model name
+        temperature: LLM temperature
+        visualize: Whether to generate flow visualization
+        
+    Returns:
+        Processing results dictionary
+    """
+    # Initialize LLM based on provider
+    provider = config.llm_provider
+    
+    if provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        llm = ChatGoogleGenerativeAI(
+            model=config.google_model,
+            temperature=temperature
+        )
+    elif provider == "openai":
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(
+            model=model,
+            temperature=temperature
+        )
+    else:
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+    
+    logger.info(f"Using {provider} provider with model {model}")
+    
+    # Execute flow
+    results = kickoff_flow(
+        case_id=case_id,
+        file_paths=document_paths,
+        llm=llm,
+        visualize=visualize
+    )
+    
+    return results
+
+
+def format_flow_summary(results: dict) -> str:
+    """
+    Format flow results into a human-readable summary.
+    
+    Args:
+        results: Results from flow execution
+        
+    Returns:
+        Formatted summary string
+    """
+    summary_lines = []
+    summary_lines.append("\n" + "="*60)
+    summary_lines.append("  PROCESSING SUMMARY")
+    summary_lines.append("="*60)
+    
+    # Case info
+    summary_lines.append(f"\n📋 Case ID: {results.get('case_id', 'N/A')}")
+    summary_lines.append(f"📊 Status: {results.get('status', 'unknown').upper()}")
+    
+    # Processing time
+    if results.get('processing_time'):
+        summary_lines.append(f"⏱️  Processing Time: {results['processing_time']:.2f} seconds")
+    
+    # Document counts
+    docs = results.get('documents', {})
+    summary_lines.append(f"\n📄 Documents:")
+    summary_lines.append(f"   Total: {docs.get('total', 0)}")
+    summary_lines.append(f"   ✅ Successful: {docs.get('successful', 0)}")
+    summary_lines.append(f"   ❌ Failed: {docs.get('failed', 0)}")
+    summary_lines.append(f"   ⚠️  Requires Review: {docs.get('requires_review', 0)}")
+    
+    # Errors
+    errors = results.get('errors', [])
+    if errors:
+        summary_lines.append(f"\n⚠️  Errors ({len(errors)}):")
+        for i, error in enumerate(errors[:5], 1):  # Show first 5 errors
+            summary_lines.append(f"   {i}. {error}")
+        if len(errors) > 5:
+            summary_lines.append(f"   ... and {len(errors) - 5} more")
+    
+    # Stage results
+    if results.get('validated_documents'):
+        summary_lines.append(f"\n✓ Intake: {len(results['validated_documents'])} documents validated")
+    if results.get('classifications'):
+        summary_lines.append(f"✓ Classification: {len(results['classifications'])} documents classified")
+    if results.get('extractions'):
+        summary_lines.append(f"✓ Extraction: {len(results['extractions'])} documents extracted")
+    
+    summary_lines.append("\n" + "="*60 + "\n")
+    
+    return "\n".join(summary_lines)
 
 
 def main():
@@ -47,8 +157,18 @@ Examples:
     
     parser.add_argument(
         "--use-crew",
+        help="Use batch classification (process multiple documents at once)"
+    )
+    
+    parser.add_argument(
+        "--case-id",
+        help="Case ID for document processing (auto-generated if not provided)"
+    )
+    
+    parser.add_argument(
+        "--visualize-flow",
         action="store_true",
-        help="Use CrewAI workflow orchestration"
+        help="Generate flow visualization HTML file"
     )
     
     parser.add_argument(
@@ -78,26 +198,19 @@ Examples:
     
     args = parser.parse_args()
     
-    # Initialize orchestrator
-    try:
-        orchestrator = KYCAMLOrchestrator(
-            model_name=args.model,
-            temperature=args.temperature,
-            use_batch_classification=args.batch
-        )
-    except Exception as e:
-        logger.error(f"Failed to initialize orchestrator: {str(e)}")
-        print(f"\n❌ Error: {str(e)}")
-        print("\nPlease ensure:")
-        print("  1. You have created a .env file (copy from .env.example)")
-        print("  2. You have set OPENAI_API_KEY in the .env file")
-        print("  3. All required dependencies are installed (pip install -r requirements.txt)")
-        return 1
-    
-    # Health check
+    # Health check for classifier API
     if args.health_check:
         print("\n🔍 Checking classifier API health...")
-        is_healthy = orchestrator.check_classifier_health()
+        from agents import ClassifierAPIClient
+        client = ClassifierAPIClient()
+        is_healthy = client.health_check()
+        if is_healthy:
+            print("✅ Classifier API is healthy and responding")
+            return 0
+        else:
+            print("❌ Classifier API is not responding")
+            print(f"   Check that the service is running at: {config.classifier_api_url}")
+            return 1
         if is_healthy:
             print("✅ Classifier API is healthy and responding")
             return 0
@@ -122,21 +235,39 @@ Examples:
             return 1
         document_paths.append(str(path.absolute()))
     
+    # Generate case ID if not provided
+    case_id = args.case_id or f"case_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+    
     print(f"\n📄 Processing {len(document_paths)} document(s)...")
+    print(f"   Case ID: {case_id}")
     print(f"   Model: {args.model}")
-    print(f"   Batch mode: {'Yes' if args.batch else 'No'}")
-    print(f"   CrewAI mode: {'Yes' if args.use_crew else 'No'}")
     print()
     
-    # Process documents
+    # Process documents using CrewAI Flow
     try:
-        if args.use_crew:
+        results = process_with_flow(
+            case_id=case_id,
+            document_paths=document_paths,
+            model=args.model,
+            temperature=args.temperature,
+            visualize=args.visualize_flow
+        )
+        
+        # Print summary
+        summary = format_flow_summary(results)
+        print(summary)
+        elif args.use_crew:
+            # Legacy CrewAI approach
             results = orchestrator.process_with_crew(document_paths)
         else:
+            # Legacy direct processing
             results = orchestrator.process_documents(document_paths)
         
         # Print summary
-        summary = orchestrator.get_processing_summary(results)
+        if args.use_flow:
+            summary = format_flow_summary(results)
+        else:
+            summary = orchestrator.get_processing_summary(results)
         print(summary)
         
         # Save to file if specified

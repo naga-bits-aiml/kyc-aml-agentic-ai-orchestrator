@@ -83,23 +83,35 @@ class ConfigLoader:
     def _resolve_env_vars(self, config: Any) -> Any:
         """Recursively resolve environment variable placeholders in config.
         
-        Replaces ${VAR_NAME} with the value from environment variable.
+        Simple logic:
+        - ${VAR_NAME:default} - Split at first ':', use env var or default
+        - ${VAR_NAME} - Use env var or empty string
         """
         if isinstance(config, dict):
             return {k: self._resolve_env_vars(v) for k, v in config.items()}
         elif isinstance(config, list):
             return [self._resolve_env_vars(item) for item in config]
         elif isinstance(config, str):
-            # Match ${VAR_NAME} pattern
+            # Match ${...} pattern
             pattern = r'\$\{([^}]+)\}'
-            matches = re.findall(pattern, config)
-            
-            result = config
-            for var_name in matches:
-                env_value = os.getenv(var_name, "")
-                result = result.replace(f"${{{var_name}}}", env_value)
-            
-            return result
+
+            def _replace(match: re.Match) -> str:
+                content = match.group(1)  # Everything inside ${}
+                
+                # Split at FIRST occurrence of ':'
+                if ':' in content:
+                    var_name, default_value = content.split(':', 1)
+                else:
+                    var_name = content
+                    default_value = ""
+                
+                # Get environment variable
+                env_value = os.getenv(var_name.strip())
+                
+                # Use env var if set, otherwise use default
+                return env_value if env_value is not None else default_value
+
+            return re.sub(pattern, _replace, config)
         else:
             return config
     
@@ -252,6 +264,11 @@ class ConfigLoader:
     @property
     def allowed_extensions(self) -> list:
         return self.get('document_validation.allowed_extensions', ['.pdf'])
+    
+    @property
+    def llm_provider(self) -> str:
+        """Get the configured LLM provider."""
+        return self.get('llm.provider', 'openai')
     
     @property
     def openai_api_key(self) -> str:

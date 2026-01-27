@@ -1,8 +1,17 @@
 """API client for KYC-AML Document Classifier service."""
 import requests
+import tempfile
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from tenacity import retry, stop_after_attempt, wait_exponential
 from utilities import config, settings, logger
+
+try:
+    from pdf2image import convert_from_path
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    PDF2IMAGE_AVAILABLE = False
+    logger.warning("pdf2image not available. PDF conversion will be skipped.")
 
 
 class ClassifierAPIClient:
@@ -33,6 +42,48 @@ class ClassifierAPIClient:
                 "Content-Type": "application/json"
             })
     
+    def _convert_pdf_to_image(self, pdf_path: str) -> Optional[str]:
+        """
+        Convert PDF to image (first page) for classification.
+        
+        Args:
+            pdf_path: Path to the PDF file
+            
+        Returns:
+            Path to the temporary image file, or None if conversion fails
+        """
+        if not PDF2IMAGE_AVAILABLE:
+            logger.warning("pdf2image not available. Cannot convert PDF to image.")
+            return None
+        
+        try:
+            logger.info(f"Converting PDF to image for classification: {pdf_path}")
+            
+            # Convert first page to image
+            images = convert_from_path(pdf_path, first_page=1, last_page=1, dpi=200)
+            
+            if not images:
+                logger.error(f"No images extracted from PDF: {pdf_path}")
+                return None
+            
+            # Save to temporary file
+            temp_dir = Path(tempfile.gettempdir()) / "kyc_classifier_temp"
+            temp_dir.mkdir(exist_ok=True)
+            
+            temp_image_path = temp_dir / f"{Path(pdf_path).stem}_page1.jpg"
+            images[0].save(str(temp_image_path), 'JPEG', quality=85)
+            
+            logger.info(f"PDF converted to image: {temp_image_path}")
+            return str(temp_image_path)
+            
+        except Exception as e:
+            logger.error(f"Error converting PDF to image: {str(e)}")
+            return None
+    
+    def _should_convert_to_image(self, file_path: str) -> bool:
+        """Check if file should be converted to image before classification."""
+        return Path(file_path).suffix.lower() == '.pdf'
+    
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10)
@@ -44,6 +95,8 @@ class ClassifierAPIClient:
     ) -> Dict[str, Any]:
         """
         Classify a single document using the KYC document classifier API.
+        
+        Automatically converts PDFs to images before sending to the API.
         
         API Endpoint: http://35.184.130.36/api/kyc_document_classifier/v1/
         
@@ -57,8 +110,21 @@ class ClassifierAPIClient:
         # API expects files to be posted to the base URL
         url = self.base_url
         
+        # Convert PDF to image if needed
+        classification_file = file_path
+        temp_image = None
+        
+        if self._should_convert_to_image(file_path):
+            logger.info(f"PDF detected, converting to image for classification: {file_path}")
+            temp_image = self._convert_pdf_to_image(file_path)
+            if temp_image:
+                classification_file = temp_image
+                logger.info(f"Using converted image for classification: {classification_file}")
+            else:
+                logger.warning(f"PDF conversion failed, attempting with original file: {file_path}")
+        
         try:
-            with open(file_path, 'rb') as f:
+            with open(classification_file, 'rb') as f:
                 files = {'file': f}
                 data = {'metadata': str(metadata)} if metadata else {}
                 
@@ -77,6 +143,15 @@ class ClassifierAPIClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"Error classifying document {file_path}: {str(e)}")
             raise
+        
+        finally:
+            # Clean up temporary image file
+            if temp_image and Path(temp_image).exists():
+                try:
+                    Path(temp_image).unlink()
+                    logger.debug(f"Cleaned up temporary image: {temp_image}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temporary image {temp_image}: {e}")
     
     @retry(
         stop=stop_after_attempt(3),

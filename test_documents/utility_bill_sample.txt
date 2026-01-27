@@ -1,0 +1,45 @@
+UTILITY BILL
+=====================================
+
+British Gas
+Customer Service Center
+PO Box 227, Rotherham
+S98 1PB, United Kingdom
+
+Account Details
+-------------------
+Account Number: 123456789012
+Customer Reference: BG-2024-0145
+Bill Date: 15 January 2026
+Due Date: 05 February 2026
+
+Service Address
+-------------------
+Mr. John Smith
+123 Baker Street
+London, W1U 6TN
+United Kingdom
+
+Billing Period: 15 Dec 2025 - 14 Jan 2026
+
+-------------------
+Charges
+-------------------
+Electricity Usage (450 kWh)      £67.50
+Gas Usage (120 therms)           £82.40
+Standing Charge                  £23.10
+VAT (5%)                         £8.65
+-------------------
+Total Amount Due:                £181.65
+
+Previous Balance:                £0.00
+Payments Received:               £0.00
+Current Amount Due:              £181.65
+
+Payment Methods
+-------------------
+Online: www.britishgas.co.uk
+Phone: 0333 202 9532
+Direct Debit
+
+This bill serves as proof of residence at the service address.

@@ -8,7 +8,7 @@ from pathlib import Path
 import json
 from datetime import datetime
 from orchestrator import KYCAMLOrchestrator
-from langchain.schema import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from utilities import config, settings, logger
 import os
 
@@ -64,13 +64,17 @@ st.markdown("""
 
 def initialize_session_state():
     """Initialize Streamlit session state."""
-    if 'orchestrator' not in st.session_state:
+    if 'crew' not in st.session_state:
         try:
-            st.session_state.orchestrator = KYCAMLOrchestrator(temperature=0.3)
-            st.session_state.llm = st.session_state.orchestrator.llm
+            st.session_state.crew = KYCAMLCrew()
+            st.session_state.llm = ChatOpenAI(
+                model=config.openai_model,
+                temperature=0.3,
+                openai_api_key=config.openai_api_key
+            )
         except Exception as e:
-            st.error(f"Failed to initialize orchestrator: {str(e)}")
-            st.session_state.orchestrator = None
+            st.error(f"Failed to initialize crew: {str(e)}")
+            st.session_state.crew = None
     
     if 'messages' not in st.session_state:
         st.session_state.messages = []
@@ -82,6 +86,9 @@ Help users with document submission, classification, and compliance questions. B
     
     if 'processed_documents' not in st.session_state:
         st.session_state.processed_documents = []
+    
+    if 'case_reference' not in st.session_state:
+        st.session_state.case_reference = 'WEB-CASE-001'
 
 
 def display_chat_message(role: str, content: str):
@@ -108,8 +115,8 @@ def get_llm_response(user_message: str) -> str:
 
 def process_uploaded_files(uploaded_files):
     """Process uploaded files."""
-    if not st.session_state.orchestrator:
-        return {"error": "Orchestrator not initialized"}
+    if not st.session_state.crew:
+        return {"error": "CrewAI crew not initialized"}
     
     # Save uploaded files temporarily
     temp_dir = Path("temp_uploads")
@@ -123,13 +130,14 @@ def process_uploaded_files(uploaded_files):
         file_paths.append(str(file_path))
     
     try:
-        # Process documents
-        results = st.session_state.orchestrator.process_documents(file_paths)
+        # Process documents using CrewAI flow
+        case_ref = st.session_state.case_reference
+        result = kickoff_flow(case_reference=case_ref, document_paths=file_paths)
         
         # Track processed documents
         st.session_state.processed_documents.extend(file_paths)
         
-        return results
+        return {"success": True, "result": str(result), "summary": {"processed": len(file_paths), "case": case_ref}}
     except Exception as e:
         return {"error": str(e)}
     finally:
@@ -146,17 +154,24 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("## 🎛️ Control Panel")
         
+        # Case reference input
+        st.markdown("### Case Reference")
+        new_case = st.text_input(
+            "Current Case",
+            value=st.session_state.case_reference,
+            help="Enter case reference (e.g., KYC-2024-001)"
+        )
+        if new_case != st.session_state.case_reference:
+            st.session_state.case_reference = new_case.upper()
+            st.success(f"✅ Case set to: {new_case}")
+        
         # Health check
         st.markdown("### System Status")
         if st.button("🔍 Check Health"):
-            if st.session_state.orchestrator:
-                is_healthy = st.session_state.orchestrator.check_classifier_health()
-                if is_healthy:
-                    st.success("✅ System is healthy")
-                else:
-                    st.error("❌ Classifier API not responding")
+            if st.session_state.crew and st.session_state.llm:
+                st.success("✅ System ready")
             else:
-                st.error("❌ Orchestrator not initialized")
+                st.error("❌ System not fully initialized")
         
         # Statistics
         st.markdown("### 📊 Statistics")
