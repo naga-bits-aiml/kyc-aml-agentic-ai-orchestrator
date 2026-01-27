@@ -13,7 +13,11 @@ from langchain.llms.base import BaseLLM
 from tools.intake_tools import (
     validate_document_tool,
     batch_validate_documents_tool,
-    organize_case_documents_tool
+    organize_case_documents_tool,
+    link_document_to_case_tool,
+    get_document_by_id_tool,
+    list_documents_by_case_tool,
+    list_all_documents_tool
 )
 from tools.classifier_tools import (
     classify_document_tool,

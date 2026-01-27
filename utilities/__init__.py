@@ -13,7 +13,8 @@ from .utils import (
     validate_file_size,
     compute_file_hash,
     create_document_metadata,
-    ensure_directory
+    ensure_directory,
+    generate_document_id
 )
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     'create_document_metadata',
     'ensure_directory',
     'calculate_file_hash',
+    'generate_document_id',
 ]

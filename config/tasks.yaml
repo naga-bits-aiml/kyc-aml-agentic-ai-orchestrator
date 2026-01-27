@@ -6,40 +6,41 @@
 
 validate_documents_task:
   description: >
-    Validate the uploaded documents for case {case_id}.
+    Validate and store the uploaded documents with globally unique IDs.
     
     Use the batch_validate_documents_tool with the following file paths: {file_paths}
     
-    Perform the following validations:
+    Perform the following:
     1. Check file existence and accessibility
     2. Verify file formats are supported (PDF, PNG, JPG, JPEG)
     3. Validate file sizes (not empty, not too large >10MB)
     4. Test file readability and integrity
-    5. Convert PDFs to images if needed
-    6. Generate unique document IDs
-    7. Create metadata for each valid document
+    5. Generate globally unique document IDs (format: DOC_YYYYMMDD_HHMMSS_XXXXX)
+    6. Store documents in documents/intake/ directory
+    7. Create metadata files for each document
     
-    IMPORTANT: Use the exact file paths provided in {file_paths}. Do not fabricate or assume file paths.
-    
-    Move validated documents to the processing queue and update case metadata.
-    Flag any documents that fail validation with specific error reasons.
+    IMPORTANT: 
+    - Use the exact file paths provided in {file_paths}
+    - Do not require or assume a case_id
+    - Documents can be linked to cases later using link_document_to_case_tool
+    - Each document gets a globally unique ID independent of any case
   
   expected_output: >
     JSON object containing:
     - validated_documents: List of validated document objects, each with:
-      - document_id: Unique identifier (UUID)
+      - document_id: Globally unique identifier (e.g., DOC_20260127_143022_A3F8B)
       - original_filename: Original file name
-      - file_path: Path to validated file
+      - stored_path: Path to stored file in intake directory
       - file_size: Size in bytes
       - mime_type: MIME type (application/pdf, image/png, etc.)
       - validation_status: "valid" or "invalid"
       - validation_timestamp: ISO 8601 timestamp
-      - error_message: If invalid, the specific error
+      - stage: "intake"
+    - failed_documents: List of failed validations with issues
     - summary:
-      - total_documents: Total count
-      - valid_count: Number of valid documents
-      - invalid_count: Number of invalid documents
-      - case_id: The case identifier
+      - total: Total count
+      - valid: Number of valid documents
+      - invalid: Number of invalid documents
   
   agent: document_intake_agent
 

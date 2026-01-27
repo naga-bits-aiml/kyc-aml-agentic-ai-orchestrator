@@ -35,7 +35,7 @@ class DocumentProcessingState(BaseModel):
     Uses Pydantic for type-safe state transitions.
     """
     # Input parameters
-    case_id: str = Field(default="", description="Unique case identifier")
+    case_id: Optional[str] = Field(default=None, description="Optional case identifier for linking documents")
     file_paths: List[str] = Field(default_factory=list, description="List of document file paths")
     
     # Processing state
@@ -91,29 +91,43 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
         Stage 1: Document intake and validation.
         
         This is the entry point of the flow. It validates all incoming documents,
-        checks file integrity, and prepares them for processing.
+        generates globally unique IDs, and stores them in documents/intake/ directory.
+        Documents can be linked to cases later if case_id is provided.
         """
         self.state.current_stage = "intake"
         self.state.start_time = datetime.now()
         
         try:
-            # Execute intake using crew
+            # Execute intake using crew (case_id optional)
             intake_crew = self.crew.intake_crew()
-            intake_output = intake_crew.kickoff(inputs={
-                'case_id': self.state.case_id,
+            intake_inputs = {
                 'file_paths': self.state.file_paths
-            })
+            }
+            if self.state.case_id:
+                intake_inputs['case_id'] = self.state.case_id
+            
+            logger.info(f"Executing intake crew with inputs: {intake_inputs}")
+            intake_output = intake_crew.kickoff(inputs=intake_inputs)
+            logger.info(f"Intake crew completed. Output type: {type(intake_output)}")
             
             # Extract result from CrewOutput and parse JSON
             import json
-            intake_result = json.loads(intake_output.raw) if hasattr(intake_output, 'raw') else intake_output
+            if hasattr(intake_output, 'raw'):
+                logger.info(f"Intake raw output: {intake_output.raw[:500]}...")  # Log first 500 chars
+                intake_result = json.loads(intake_output.raw)
+            else:
+                logger.info(f"Intake output (no raw attribute): {str(intake_output)[:500]}...")
+                intake_result = intake_output
             
             # Update state with results
             self.state.validated_documents = intake_result.get('validated_documents', [])
             self.state.total_documents = len(self.state.validated_documents)
+            logger.info(f"Intake complete: {self.state.total_documents} documents validated")
                 
         except Exception as e:
             error_msg = f"Intake exception: {str(e)}"
+            logger.error(error_msg)
+            logger.exception("Full intake error traceback:")
             self.state.errors.append(error_msg)
             self.state.current_stage = "failed"
     
@@ -252,26 +266,26 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
 
 
 def kickoff_flow(
-    case_id: str,
     file_paths: List[str],
-    llm,
+    case_id: Optional[str] = None,
+    llm = None,
     visualize: bool = False
 ) -> Dict[str, Any]:
     """
     Convenience function to kickoff a document processing flow.
     
     Args:
-        case_id: Unique case identifier
         file_paths: List of document file paths to process
+        case_id: Optional case identifier for linking documents to a case
         llm: Language model instance
         visualize: Whether to generate flow visualization (default: False)
         
     Returns:
-        Complete processing results
+        Complete processing results including document IDs
     """
     if not FLOW_AVAILABLE:
         # Fallback to direct crew execution
-        return process_documents(case_id, file_paths, llm)
+        return process_documents(case_id or "UNLINKED", file_paths, llm)
     
     # Initialize flow with state
     flow = DocumentProcessingFlow(llm=llm)
@@ -281,12 +295,13 @@ def kickoff_flow(
     # Optionally visualize the flow
     if visualize:
         try:
-            flow.plot(filename=f"flow_{case_id}.html")
+            flow_name = f"flow_{case_id}" if case_id else "flow_unlinked"
+            flow.plot(filename=f"{flow_name}.html")
         except Exception as e:
             pass
     
     # Execute the flow
-    logger.info(f"Kicking off flow for case {case_id} with {len(file_paths)} documents")
+    logger.info(f"Kicking off flow with {len(file_paths)} documents" + (f" for case {case_id}" if case_id else ""))
     flow.kickoff()
     
     # Return results

@@ -4,6 +4,18 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import hashlib
 from datetime import datetime
+import uuid
+
+
+def generate_document_id() -> str:
+    """
+    Generate a globally unique document ID.
+    Format: DOC_YYYYMMDD_HHMMSS_XXXXX
+    Example: DOC_20260127_143022_A3F8B
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    unique_suffix = uuid.uuid4().hex[:5].upper()
+    return f"DOC_{timestamp}_{unique_suffix}"
 
 
 def validate_file_extension(filename: str, allowed_extensions: list) -> bool:

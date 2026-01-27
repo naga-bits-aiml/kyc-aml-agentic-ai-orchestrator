@@ -672,10 +672,13 @@ def create_chat_tools(chat_interface):
     
     @tool
     def submit_documents_for_processing(file_paths: str, case_reference: Optional[str] = None) -> str:
-        """Submit documents to the KYC/AML processing pipeline.
+        """Submit documents for processing - NO CASE REQUIRED.
         
-        This tool accepts document paths and processes them through the CrewAI agents for:
-        - Document intake and validation
+        Documents can be processed independently and linked to cases later if needed.
+        Each document gets a globally unique ID (e.g., DOC_20260127_143022_A3F8B).
+        
+        This tool processes documents through the CrewAI pipeline for:
+        - Document intake and validation (generates unique document ID)
         - Classification (passport, driver's license, utility bill, etc.)
         - Data extraction (names, dates, addresses, document numbers)
         
@@ -684,22 +687,20 @@ def create_chat_tools(chat_interface):
                 - Single path: "~/Downloads/passport.pdf"
                 - Multiple paths (comma-separated): "~/Downloads/passport.pdf, ~/Documents/bill.pdf"
                 - With spaces: "~/My Documents/file.pdf"
-            case_reference: Case ID (optional, uses current case)
+            case_reference: OPTIONAL case ID. If not provided, documents are processed independently.
+                           Use link_document_to_case later to associate with cases.
             
         Returns:
             Processing results with document IDs and extracted information.
             
         Examples:
-            submit_documents_for_processing("~/Downloads/passport.pdf")
-            submit_documents_for_processing("/Users/john/Documents/license.pdf, /Users/john/Documents/bill.pdf")
+            submit_documents_for_processing("~/Downloads/passport.pdf")  # No case needed
+            submit_documents_for_processing("~/Downloads/policy.pdf", case_reference="KYC-2026-001")
         """
         from flows.document_processing_flow import kickoff_flow
         import re
         
         case_ref = case_reference or chat_interface.case_reference
-        
-        if not case_ref:
-            return "⚠️  No case selected. Please switch to a case first or create a new one."
         
         # Parse file paths (handle comma-separated, quoted paths, tilde)
         paths = []
@@ -726,15 +727,18 @@ def create_chat_tools(chat_interface):
         
         try:
             msg = f"🚀 Processing {len(paths)} document(s) through CrewAI pipeline...\n"
-            msg += f"   📁 Case: {case_ref}\n"
+            if case_ref:
+                msg += f"   📁 Case: {case_ref}\n"
+            else:
+                msg += f"   📁 No case set - documents will get unique IDs\n"
             
             for i, p in enumerate(paths, 1):
                 msg += f"   {i}. {Path(p).name}\n"
             
-            # Call CrewAI flow with correct parameters
+            # Call CrewAI flow (case_id is optional now)
             result = kickoff_flow(
-                case_id=case_ref,
                 file_paths=paths,
+                case_id=case_ref,  # Can be None
                 llm=chat_interface.llm
             )
             
@@ -742,40 +746,52 @@ def create_chat_tools(chat_interface):
             msg += f"\n✅ Processing Complete!\n\n"
             
             if isinstance(result, dict):
+                # Check for errors first
+                if result.get('errors'):
+                    msg += f"⚠️  Errors encountered:\n"
+                    for error in result['errors'][:5]:  # Show first 5 errors
+                        msg += f"   • {error}\n"
+                    if len(result['errors']) > 5:
+                        msg += f"   ... and {len(result['errors']) - 5} more errors\n"
+                    msg += f"\n"
+                
+                # Show status
+                status = result.get('status', 'unknown')
+                if status == 'failed':
+                    msg += f"❌ Status: FAILED\n\n"
+                elif status == 'partial':
+                    msg += f"⚠️  Status: PARTIAL (some documents failed)\n\n"
+                elif status == 'requires_review':
+                    msg += f"⚠️  Status: REQUIRES REVIEW\n\n"
+                else:
+                    msg += f"✅ Status: {status.upper()}\n\n"
+                
+                # Show document IDs if available
+                if 'validated_documents' in result and result['validated_documents']:
+                    msg += f"📄 Documents Processed:\n"
+                    for doc in result['validated_documents'][:10]:  # Show first 10
+                        doc_id = doc.get('document_id', 'Unknown')
+                        filename = doc.get('original_filename', 'Unknown')
+                        msg += f"   • {doc_id}: {filename}\n"
+                    if len(result['validated_documents']) > 10:
+                        msg += f"   ... and {len(result['validated_documents']) - 10} more\n"
+                elif status != 'failed':
+                    msg += f"⚠️  No documents were validated\n"
+                
                 # Show document summary statistics
                 if 'documents' in result and isinstance(result['documents'], dict):
                     doc_stats = result['documents']
-                    msg += f"📊 Document Summary:\n"
+                    msg += f"\n📊 Summary:\n"
                     msg += f"   • Total: {doc_stats.get('total', 0)}\n"
                     msg += f"   • Successful: {doc_stats.get('successful', 0)}\n"
                     msg += f"   • Failed: {doc_stats.get('failed', 0)}\n"
-                    msg += f"   • Requires Review: {doc_stats.get('requires_review', 0)}\n"
                 
-                # Show validated documents
-                if 'validated_documents' in result and result['validated_documents']:
-                    msg += f"\n📄 Validated Documents: {len(result['validated_documents'])}\n"
-                
-                # Show classifications
-                if 'classifications' in result and result['classifications']:
-                    msg += f"\n📝 Classifications:\n"
-                    for cls in result['classifications'][:5]:  # Show first 5
-                        doc_type = cls.get('document_type', 'unknown')
-                        confidence = cls.get('confidence', 0)
-                        msg += f"   • {doc_type} (confidence: {confidence:.1%})\n"
-                    if len(result['classifications']) > 5:
-                        msg += f"   ... and {len(result['classifications']) - 5} more\n"
-                
-                # Show extraction results
-                if 'extractions' in result and result['extractions']:
-                    msg += f"\n📈 Extractions: {len(result['extractions'])} documents processed\n"
-                
-                # Show errors
-                if 'errors' in result and result['errors']:
-                    msg += f"\n⚠️  Errors:\n"
-                    for error in result['errors'][:3]:  # Show first 3
-                        msg += f"   • {error}\n"
-                    if len(result['errors']) > 3:
-                        msg += f"   ... and {len(result['errors']) - 3} more\n"
+                # Suggest next steps
+                if not case_ref and result.get('validated_documents'):
+                    doc_ids = [d.get('document_id') for d in result['validated_documents'] if d.get('document_id')]
+                    if doc_ids:
+                        msg += f"\n💡 Next: Link documents to a case using:\n"
+                        msg += f"   'link document {doc_ids[0]} to case KYC-2026-XXX'\n"
             else:
                 msg += f"📋 Result: {result}\n"
             
