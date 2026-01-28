@@ -38,6 +38,7 @@ class DocumentProcessingState(BaseModel):
     # Input parameters
     case_id: Optional[str] = Field(default=None, description="Optional case identifier for linking documents")
     file_paths: List[str] = Field(default_factory=list, description="List of document file paths")
+    processing_mode: str = Field(default="process", description="Processing mode: 'process' (skip successful stages) or 'reprocess' (rerun all stages)")
     
     # Processing state
     current_stage: str = Field(default="initialized", description="Current workflow stage")
@@ -113,13 +114,17 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
         """
         self.state.current_stage = "intake"
         self.state.start_time = datetime.now()
-        self.state.stage_metadata['intake']['status'] = 'running'
+        
+        # Get the ACTUAL previous status before changing it
+        previous_status = self.state.stage_metadata['intake'].get('status', 'pending')
         
         try:
-            # Execute intake using crew (case_id optional)
+            # Execute intake using crew - agent decides whether to skip or execute
             intake_crew = self.crew.intake_crew()
             intake_inputs = {
-                'file_paths': self.state.file_paths
+                'file_paths': self.state.file_paths,
+                'processing_mode': self.state.processing_mode,
+                'stage_status': previous_status  # Pass actual previous status
             }
             if self.state.case_id:
                 intake_inputs['case_id'] = self.state.case_id
@@ -136,6 +141,15 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
             else:
                 logger.info(f"Intake output (no raw attribute): {str(intake_output)[:500]}...")
                 intake_result = intake_output
+            
+            # Check if stage was skipped
+            if intake_result.get('skipped'):
+                logger.info(f"Intake stage skipped: {intake_result.get('message')}")
+                # Keep existing status, don't update to success
+                return self.state
+            
+            # Stage was executed, set to running then success
+            self.state.stage_metadata['intake']['status'] = 'running'
             
             # Update state with results
             self.state.validated_documents = intake_result.get('validated_documents', [])
@@ -181,7 +195,9 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
         Results are captured in stage_metadata['classification'].
         """
         self.state.current_stage = "classification"
-        self.state.stage_metadata['classification']['status'] = 'running'
+        
+        # Get the ACTUAL previous status before changing it
+        previous_status = self.state.stage_metadata['classification'].get('status', 'pending')
         
         try:
             # Use documents from intake if available, otherwise use file paths
@@ -190,16 +206,26 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
             if not documents_to_classify:
                 logger.warning("No validated documents from intake. Classification may fail.")
             
-            # Execute classification using crew
+            # Execute classification using crew - agent decides whether to skip or execute
             classification_crew = self.crew.classification_crew()
             classification_output = classification_crew.kickoff(inputs={
                 'case_id': self.state.case_id,
-                'documents': documents_to_classify
+                'documents': documents_to_classify,
+                'processing_mode': self.state.processing_mode,
+                'stage_status': previous_status  # Pass actual previous status
             })
             
             # Extract result from CrewOutput and parse JSON
             import json
             classification_result = json.loads(classification_output.raw) if hasattr(classification_output, 'raw') else classification_output
+            
+            # Check if stage was skipped
+            if classification_result.get('skipped'):
+                logger.info(f"Classification stage skipped: {classification_result.get('message')}")
+                return self.state
+            
+            # Stage was executed, set to running then success
+            self.state.stage_metadata['classification']['status'] = 'running'
             
             # Update state with results
             self.state.classifications = classification_result.get('classifications', [])
@@ -248,7 +274,9 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
         Results are captured in stage_metadata['extraction'].
         """
         self.state.current_stage = "extraction"
-        self.state.stage_metadata['extraction']['status'] = 'running'
+        
+        # Get the ACTUAL previous status before changing it
+        previous_status = self.state.stage_metadata['extraction'].get('status', 'pending')
         
         try:
             # Use classifications if available, otherwise try with file paths
@@ -257,11 +285,13 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
             if not classifications_to_extract:
                 logger.warning("No classifications available. Extraction may fail.")
             
-            # Execute extraction using crew
+            # Execute extraction using crew - agent decides whether to skip or execute
             extraction_crew = self.crew.extraction_crew()
             extraction_output = extraction_crew.kickoff(inputs={
                 'case_id': self.state.case_id,
-                'classifications': classifications_to_extract
+                'classifications': classifications_to_extract,
+                'processing_mode': self.state.processing_mode,
+                'stage_status': previous_status  # Pass actual previous status
             })
             
             # Extract result from CrewOutput (Vision API returns structured JSON)
@@ -295,6 +325,14 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
             else:
                 logger.error(f"Unexpected output type: {type(extraction_output)}")
                 extraction_result = {"error": "Invalid output format", "output": str(extraction_output)[:500]}
+            
+            # Check if stage was skipped
+            if extraction_result.get('skipped'):
+                logger.info(f"Extraction stage skipped: {extraction_result.get('message')}")
+                return self.state
+            
+            # Stage was executed, set to running then success
+            self.state.stage_metadata['extraction']['status'] = 'running'
             
             # Update state with results (Vision API provides structured extractions)
             self.state.extractions = extraction_result.get('extractions', [])
@@ -543,7 +581,8 @@ def kickoff_flow(
     file_paths: List[str],
     case_id: Optional[str] = None,
     llm = None,
-    visualize: bool = False
+    visualize: bool = False,
+    processing_mode: str = 'process'
 ) -> Dict[str, Any]:
     """
     Convenience function to kickoff a document processing flow.
@@ -553,6 +592,8 @@ def kickoff_flow(
         case_id: Optional case identifier for linking documents to a case
         llm: Language model instance
         visualize: Whether to generate flow visualization (default: False)
+        processing_mode: Processing mode - 'process' (smart resume, skip successful stages) 
+                        or 'reprocess' (force rerun all stages). Default: 'process'
         
     Returns:
         Complete processing results including document IDs
@@ -565,6 +606,44 @@ def kickoff_flow(
     flow = DocumentProcessingFlow(llm=llm)
     flow.state.case_id = case_id
     flow.state.file_paths = file_paths
+    flow.state.processing_mode = processing_mode
+    
+    # Smart loading: Check if files are already processed documents and load their metadata
+    if processing_mode == 'process':
+        from utilities import settings
+        intake_dir = Path(settings.documents_dir) / "intake"
+        
+        for file_path in file_paths:
+            file_path_obj = Path(file_path)
+            
+            # Check if file is in intake directory and matches DOC_* pattern
+            if file_path_obj.parent.resolve() == intake_dir.resolve():
+                doc_id = file_path_obj.stem  # DOC_20260127_213328_95D48
+                if doc_id.startswith('DOC_'):
+                    metadata_path = intake_dir / f"{doc_id}.metadata.json"
+                    if metadata_path.exists():
+                        # Load existing stage metadata
+                        with open(metadata_path, 'r') as f:
+                            metadata = json.load(f)
+                        
+                        for stage_name in ['intake', 'classification', 'extraction']:
+                            if stage_name in metadata:
+                                flow.state.stage_metadata[stage_name] = metadata[stage_name]
+                        
+                        logger.info(
+                            f"Loaded existing metadata for {doc_id}:\n" +
+                            f"  • Intake: {flow.state.stage_metadata['intake'].get('status')}\n" +
+                            f"  • Classification: {flow.state.stage_metadata['classification'].get('status')}\n" +
+                            f"  • Extraction: {flow.state.stage_metadata['extraction'].get('status')}"
+                        )
+    
+    logger.info(
+        f"Starting document processing flow\n" +
+        f"Mode: {processing_mode.upper()}\n" +
+        f"Files: {len(file_paths)}\n" +
+        f"Case: {case_id or 'None'}\n" +
+        f"Behavior: {'Skip successful stages' if processing_mode == 'process' else 'Rerun all stages'}"
+    )
     
     # Optionally visualize the flow
     if visualize:

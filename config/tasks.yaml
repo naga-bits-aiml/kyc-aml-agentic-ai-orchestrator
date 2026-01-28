@@ -6,23 +6,39 @@
 
 validate_documents_task:
   description: >
-    Validate and store documents with globally unique IDs.
+    STEP 1 (MANDATORY): Call check_if_stage_should_skip_tool(
+      processing_mode="{processing_mode}",
+      stage_status="{stage_status}",
+      stage_name="intake"
+    )
+    
+    STEP 2: If tool returns should_skip=True, return {"skipped": true, "message": "<reason>"} and STOP.
+    
+    STEP 3: If tool returns should_skip=False, proceed with validation:
     
     Use batch_validate_documents_tool with file paths: {file_paths}
     
     Steps:
-    1. Call batch_validate_documents_tool - it handles validation, ID generation, and storage
-    2. Return the result immediately - DO NOT convert PDFs to images yet
-    3. PDF conversion will happen in classification stage if needed
+    1. Check if stage should be skipped based on processing_mode and stage_status
+    2. If skip: Return JSON: {{"message": "Stage skipped - already successful", "skipped": true}}
+    3. If execute: Call batch_validate_documents_tool - it handles validation, ID generation, and storage
+    4. Return the result immediately - DO NOT convert PDFs to images yet
+    5. PDF conversion will happen in classification stage if needed
     
     IMPORTANT: Just validate and store files. Return metadata only.
   
   expected_output: >
-    JSON with:
-    - validated_documents: [{document_id, original_filename, stored_path, file_size, 
-      mime_type, validation_status}]
-    - failed_documents: [{file_path, issues}]
-    - summary: {total, valid, invalid}
+    JSON with MANDATORY FIRST FIELD:
+    - skip_check_result: {should_skip: bool, reason: str, action: str} (from check_if_stage_should_skip_tool)
+    
+    IF skip_check_result.should_skip is true:
+      - Return ONLY: {"skipped": true, "message": "<reason from skip_check_result>"}
+    
+    IF skip_check_result.should_skip is false:
+      - validated_documents: [{document_id, original_filename, stored_path, file_size, 
+        mime_type, validation_status}]
+      - failed_documents: [{file_path, issues}]
+      - summary: {total, valid, invalid}
   
   agent: document_intake_agent
 
@@ -30,24 +46,41 @@ validate_documents_task:
 
 classify_documents_task:
   description: >
-    Classify documents using API discovery and generic REST API tools.
+    STEP 1 (MANDATORY): Call check_if_stage_should_skip_tool(
+      processing_mode="{processing_mode}",
+      stage_status="{stage_status}",
+      stage_name="classification"
+    )
+    
+    STEP 2: If tool returns should_skip=True, return {"skipped": true, "message": "<reason>"} and STOP.
+    
+    STEP 3: If tool returns should_skip=False, proceed with classification:
     
     Categories: identity_proof, address_proof, financial_statement, other
     
     Process:
     1. FOR EACH DOCUMENT - Check if PDF conversion is needed:
        a. Call check_pdf_conversion_needed_tool(document_id) to check if it's a PDF
-       b. ONLY IF needs_conversion=true: Call convert_pdf_to_images_tool(document_id)
+       b. ONLY IF needs_conversion=true: 
+          - Call convert_pdf_to_images_tool(document_id)
+          - The conversion returns child_document_ids (list of image IDs created from PDF)
+          - For EACH child_document_id: Call get_document_by_id_tool(child_document_id) to get its metadata
+          - Use the child document's stored_path for classification
        c. IMPORTANT: Do NOT convert image files (jpg, png, etc.) - they are already images!
-       d. If PDF was converted, classify the child image documents, not the PDF
-    2. FOR EACH DOCUMENT TO CLASSIFY (original images or converted PDF images):
-       a. Call get_classifier_api_info_tool() to discover available API endpoints
-       b. Call extract_document_file_path_tool(document) to get the file path
-       c. Call make_classifier_api_request(endpoint_path="/", method="POST", file_path=...) to classify
-       d. Parse the API response to get predicted_class and confidence
-    3. Update metadata for EACH document using update_document_metadata_tool:
+    
+    2. FOR EACH DOCUMENT TO CLASSIFY (original images OR child images from PDF):
+       a. Get the file path:
+          - For original images: Use extract_document_file_path_tool(document)
+          - For child images: Use stored_path from get_document_by_id_tool(child_document_id)
+       b. Call make_classifier_api_request(endpoint_path="/predict", method="POST", file_path=...) to classify
+       c. Parse the API response to get predicted_class and confidence
+    
+    3. Update metadata for EACH classified document:
+       - If classifying a child image: Update the CHILD document metadata with classification results
+       - Also update the PARENT PDF metadata to reference the child classification
+       
        update_document_metadata_tool(
-         document_id="DOC_...",
+         document_id="DOC_..." (child ID for child docs, original ID for images),
          stage_name="classification",
          status="success" or "fail",
          msg="Document classified as Passport" or error description,
@@ -63,9 +96,17 @@ classify_documents_task:
     Documents: {documents}
   
   expected_output: >
-    JSON with classifications array containing document_id, predicted_class, 
-    confidence_score, requires_review for each document, plus a summary with 
-    total count of classified documents.
+    JSON with MANDATORY FIRST FIELD:
+    - skip_check_result: {should_skip: bool, reason: str, action: str} (from check_if_stage_should_skip_tool)
+    
+    IF skip_check_result.should_skip is true:
+      - Return ONLY: {"skipped": true, "message": "<reason from skip_check_result>"}
+    
+    IF skip_check_result.should_skip is false:
+      - classified_documents: [{document_id, document_type, confidence, categories, 
+        requires_review}]
+      - failed_documents: [{document_id, error}]
+      - summary: {total, success, failed}
   
   agent: document_classifier_agent
 
@@ -73,9 +114,15 @@ classify_documents_task:
 
 extract_document_data_task:
   description: >
-    Extract structured data from classified documents using Google Vision API.
+    STEP 1 (MANDATORY): Call check_if_stage_should_skip_tool(
+      processing_mode="{processing_mode}",
+      stage_status="{stage_status}",
+      stage_name="extraction"
+    )
     
-    Process (same pattern as classification):
+    STEP 2: If tool returns should_skip=True, return {"skipped": true, "message": "<reason>"} and STOP.
+    
+    STEP 3: If tool returns should_skip=False, proceed with extraction:
     1. Get documents in 'classification' stage using get_documents_by_stage("classification")
     2. FOR EACH document:
        a. Call extract_text_from_image_tool(file_path=stored_path) to get Vision API response
@@ -123,21 +170,17 @@ extract_document_data_task:
     - Mark extraction quality based on how many expected fields were found
   
   expected_output: >
-    JSON object with:
-    {
-      "extractions": [
-        {
-          "document_id": "DOC_xxx",
-          "document_type": "Passport",
-          "success": true,
-          "extracted_fields": {
-            "name": "John Doe",
-            "document_number": "A12345678",
-            "dob": "1990-01-01",
-            "issue_date": "2020-01-01",
-            "expiry_date": "2030-01-01"
-          },
-          "raw_text": "full text from vision api",
+    JSON with MANDATORY FIRST FIELD:
+    - skip_check_result: {should_skip: bool, reason: str, action: str} (from check_if_stage_should_skip_tool)
+    
+    IF skip_check_result.should_skip is true:
+      - Return ONLY: {"skipped": true, "message": "<reason from skip_check_result>"}
+    
+    IF skip_check_result.should_skip is false:
+      - extracted_documents: [{document_id, document_type, extracted_fields, confidence,
+        extraction_quality, fields_found, fields_missing}]
+      - failed_documents: [{document_id, error}]
+      - summary: {total, success, failed}
           "confidence": 0.95,
           "extraction_quality": 0.90,
           "fields_found": 5,

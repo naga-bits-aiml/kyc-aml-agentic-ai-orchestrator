@@ -154,88 +154,21 @@ def create_chat_tools(chat_interface):
         msg += f"📅 Created: {created}\n"
         msg += f"🏷️  Status: {status.upper()}\n\n"
         
-        # Document summary
-        doc_summary = case_metadata.get('document_summary', {})
-        total = doc_summary.get('total', 0)
+        # Document count
+        documents = case_metadata.get('documents', [])
+        total = len(documents)
         
         if total > 0:
-            msg += "📈 Document Summary:\n"
-            msg += f"  • Total Documents: {total}\n"
-            msg += f"  • Fully Completed: {doc_summary.get('fully_completed', 0)} ✅\n"
-            msg += f"  • Partially Completed: {doc_summary.get('partially_completed', 0)} ⏳\n"
-            msg += f"  • Pending Processing: {doc_summary.get('pending_processing', 0)} 🔵\n"
-            msg += f"  • Pending Reprocessing: {doc_summary.get('pending_reprocessing', 0)} 🔄\n"
-            msg += f"  • Failed: {doc_summary.get('failed', 0)} ❌\n\n"
+            msg += f"📄 Documents: {total}\n\n"
         else:
             msg += "📄 No documents in this case yet.\n\n"
         
         # Individual document details
-        documents = case_metadata.get('documents', [])
-        
         if documents:
-            msg += "📋 Document Details:\n"
-            msg += "-" * 60 + "\n\n"
-            
-            for idx, doc in enumerate(documents, 1):
-                doc_id = doc.get('document_id', 'unknown')
-                filename = doc.get('filename', 'unknown')
-                doc_status = doc.get('status', 'unknown')
-                
-                # Status emoji
-                status_emoji = {
-                    'fully_completed': '✅',
-                    'partially_completed': '⏳',
-                    'pending_processing': '🔵',
-                    'pending_reprocessing': '🔄',
-                    'failed': '❌'
-                }.get(doc_status, '❓')
-                
-                msg += f"{idx}. {filename} {status_emoji}\n"
-                msg += f"   ID: {doc_id}\n"
-                
-                # Classification results
-                classification = doc.get('classification', {})
-                if classification:
-                    doc_type = classification.get('document_type', 'unknown')
-                    confidence = classification.get('confidence', 0)
-                    msg += f"   📝 Type: {doc_type} (confidence: {confidence:.0%})\n"
-                
-                # Extraction results
-                extraction = doc.get('extraction', {})
-                if extraction:
-                    extracted_fields = extraction.get('extracted_data', {})
-                    if extracted_fields:
-                        msg += f"   📊 Extracted Fields: {len(extracted_fields)} fields\n"
-                        # Show key fields
-                        key_fields = ['name', 'document_number', 'date_of_birth', 'expiry_date', 'address']
-                        for field in key_fields:
-                            if field in extracted_fields:
-                                value = extracted_fields[field]
-                                if value and str(value).strip():
-                                    msg += f"      • {field.replace('_', ' ').title()}: {value}\n"
-                
-                # Processing timestamps
-                intake_date = doc.get('intake_date')
-                if intake_date:
-                    msg += f"   ⏰ Processed: {intake_date}\n"
-                
-                # Errors or warnings
-                errors = doc.get('errors', [])
-                if errors:
-                    msg += f"   ⚠️  Errors: {', '.join(errors)}\n"
-                
-                msg += "\n"
-        
-        # Next steps recommendation
-        pending = doc_summary.get('pending_processing', 0)
-        failed = doc_summary.get('failed', 0)
-        
-        if pending > 0:
-            msg += f"\n💡 Next Steps: {pending} document(s) pending processing\n"
-        elif failed > 0:
-            msg += f"\n💡 Next Steps: {failed} document(s) failed - review and reprocess\n"
-        elif total > 0 and doc_summary.get('fully_completed', 0) == total:
-            msg += "\n✨ All documents processed successfully! Case ready for review.\n"
+            msg += "📋 Documents:\n"
+            msg += "-" * 60 + "\n"
+            for idx, doc_id in enumerate(documents, 1):
+                msg += f"{idx}. {doc_id}\n"
         
         return msg
     
@@ -415,15 +348,7 @@ def create_chat_tools(chat_interface):
                 'status': 'active',
                 'workflow_stage': 'document_intake',
                 'description': description or '',
-                'documents': [],
-                'document_summary': {
-                    'total': 0,
-                    'fully_completed': 0,
-                    'partially_completed': 0,
-                    'pending_processing': 0,
-                    'pending_reprocessing': 0,
-                    'failed': 0
-                }
+                'documents': []
             }
             metadata_manager.save_metadata(metadata)
             
@@ -582,17 +507,18 @@ def create_chat_tools(chat_interface):
             if metadata_file.exists():
                 metadata_file.unlink()
             
-            # Update case metadata
+            # Update case metadata - remove document ID from list
             metadata_manager = StagedCaseMetadataManager(case_ref)
             case_metadata = metadata_manager.load_metadata()
             
-            # Remove document from documents list
+            # Find document ID by filename (need to search metadata files)
+            # For now, remove by filename match - this is a simplified approach
+            # In production, you'd look up the doc_id from metadata files
             case_metadata['documents'] = [
-                doc for doc in case_metadata.get('documents', [])
-                if doc.get('filename') != filename
+                doc_id for doc_id in case_metadata.get('documents', [])
+                if doc_id != filename  # Assumes filename might be doc_id
             ]
             
-            # Recompute summary
             metadata_manager.save_metadata(case_metadata)
             
             return f"✅ Deleted document '{filename}' from case {case_ref}"

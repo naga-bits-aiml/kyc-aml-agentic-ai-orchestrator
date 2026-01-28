@@ -498,9 +498,33 @@ def link_document_to_case_tool(document_id: str, case_id: str) -> Dict[str, Any]
             metadata["linked_cases"].append(case_id)
             metadata["last_updated"] = datetime.now().isoformat()
             
-            # Save updated metadata
+            # Save updated document metadata
             with open(metadata_path, 'w') as f:
                 json.dump(metadata, f, indent=2)
+            
+            # Now update the case metadata to include this document
+            case_dir = Path(settings.documents_dir) / "cases" / case_id
+            case_metadata_path = case_dir / "case_metadata.json"
+            
+            if case_metadata_path.exists():
+                with open(case_metadata_path, 'r') as f:
+                    case_metadata = json.load(f)
+                
+                # Add document_id to case's documents list if not already present
+                if "documents" not in case_metadata:
+                    case_metadata["documents"] = []
+                
+                # Simple array of document IDs
+                if document_id not in case_metadata["documents"]:
+                    case_metadata["documents"].append(document_id)
+                    
+                    # Save updated case metadata
+                    with open(case_metadata_path, 'w') as f:
+                        json.dump(case_metadata, f, indent=2)
+                    
+                    logger.info(f"Added document {document_id} to case {case_id}")
+            else:
+                logger.warning(f"Case metadata file not found: {case_metadata_path}")
             
             logger.info(f"Document {document_id} linked to case {case_id}")
             

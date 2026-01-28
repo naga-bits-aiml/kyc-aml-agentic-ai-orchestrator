@@ -39,6 +39,8 @@ from tools.stage_management_tools import (
     update_document_metadata_in_stage,
     update_document_metadata_tool
 )
+from tools.skip_check_tool import check_if_stage_should_skip_tool
+from tools.skip_check_tool import check_if_stage_should_skip_tool
 
 
 @CrewBase
@@ -76,6 +78,7 @@ class KYCAMLCrew:
         return Agent(
             config=self.agents_config['document_intake_agent'],
             tools=[
+                check_if_stage_should_skip_tool,
                 validate_document_tool,
                 batch_validate_documents_tool,
                 convert_pdf_to_images_tool,
@@ -98,9 +101,11 @@ class KYCAMLCrew:
         return Agent(
             config=self.agents_config['document_classifier_agent'],
             tools=[
+                check_if_stage_should_skip_tool,
                 get_classifier_api_info_tool,
                 make_classifier_api_request,
                 extract_document_file_path_tool,
+                get_document_by_id_tool,
                 convert_pdf_to_images_tool,
                 check_pdf_conversion_needed_tool,
                 update_document_metadata_tool
@@ -119,6 +124,7 @@ class KYCAMLCrew:
         return Agent(
             config=self.agents_config['document_extraction_agent'],
             tools=[
+                check_if_stage_should_skip_tool,
                 extract_text_from_pdf_tool,
                 extract_text_from_image_tool,
                 batch_extract_documents_tool,
