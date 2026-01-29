@@ -82,17 +82,20 @@ def generate_case_summary_tool(case_id: str) -> Dict[str, Any]:
         all_addresses = []
         
         for doc_id in document_ids:
-            # Find document metadata (check all stages)
+            # Find document metadata
             doc_metadata = _find_document_metadata(doc_id)
             
             if not doc_metadata:
                 logger.warning(f"Metadata not found for document {doc_id}")
                 continue
             
+            # Skip parent PDF containers
+            if doc_metadata.get('processing_status') == 'split':
+                continue
+            
             # Get classification category
             classification = doc_metadata.get('classification', {})
             doc_type = classification.get('document_type', 'unknown')
-            confidence = classification.get('confidence', 0)
             categories_list = classification.get('categories', [])
             
             # Map to our category structure
@@ -105,26 +108,32 @@ def generate_case_summary_tool(case_id: str) -> Dict[str, Any]:
             # Add document to category
             categories[category_key]["documents"].append(doc_id)
             
-            # Get extraction data
+            # Get extraction data - check multiple locations
             extraction = doc_metadata.get('extraction', {})
             extraction_status = extraction.get('status')
-            extracted_fields = extraction.get('extracted_fields', {})
+            
+            # KYC data can be in multiple places
+            kyc_data = (
+                extraction.get('kyc_data') or 
+                extraction.get('extracted_fields', {}).get('kyc_data') or
+                doc_metadata.get('extraction', {}).get('extracted_fields', {})
+            )
             
             categories[category_key]["status"].append(extraction_status)
             
             # Extract key fields based on category
             if category_key == "id_proof":
-                key_data = _extract_id_proof_data(extracted_fields)
+                key_data = _extract_id_proof_data(kyc_data)
                 if key_data.get('name'):
                     all_names.append(key_data['name'])
             elif category_key == "address_proof":
-                key_data = _extract_address_proof_data(extracted_fields)
+                key_data = _extract_address_proof_data(kyc_data)
                 if key_data.get('name'):
                     all_names.append(key_data['name'])
                 if key_data.get('address'):
                     all_addresses.append(key_data['address'])
             elif category_key == "financial_statement":
-                key_data = _extract_financial_data(extracted_fields)
+                key_data = _extract_financial_data(kyc_data)
                 if key_data.get('name'):
                     all_names.append(key_data['name'])
             
@@ -186,18 +195,14 @@ def generate_case_summary_tool(case_id: str) -> Dict[str, Any]:
 
 
 def _find_document_metadata(doc_id: str) -> Optional[Dict[str, Any]]:
-    """Find document metadata across all stages."""
-    stages = ["intake", "classification", "extraction", "processed"]
-    
-    for stage in stages:
-        metadata_path = Path(settings.documents_dir) / stage / f"{doc_id}.metadata.json"
-        if metadata_path.exists():
-            try:
-                with open(metadata_path, 'r') as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.error(f"Error reading metadata for {doc_id}: {e}")
-                continue
+    """Find document metadata - documents are stored in intake folder."""
+    metadata_path = Path(settings.documents_dir) / "intake" / f"{doc_id}.metadata.json"
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error reading metadata for {doc_id}: {e}")
     
     return None
 
@@ -227,9 +232,10 @@ def _map_to_category(categories_list: List[str], doc_type: str) -> str:
 def _extract_id_proof_data(fields: Dict[str, Any]) -> Dict[str, Any]:
     """Extract key fields for identity proof documents."""
     return {
-        "name": fields.get("name") or fields.get("full_name") or fields.get("holder_name"),
-        "dob": fields.get("dob") or fields.get("date_of_birth") or fields.get("birth_date"),
-        "document_number": fields.get("document_number") or fields.get("id_number") or fields.get("passport_number"),
+        "name": fields.get("full_name") or fields.get("name") or fields.get("holder_name"),
+        "dob": fields.get("date_of_birth") or fields.get("dob") or fields.get("birth_date"),
+        "father_name": fields.get("father_name") or fields.get("fathers_name"),
+        "document_number": fields.get("pan_number") or fields.get("document_number") or fields.get("id_number") or fields.get("passport_number"),
         "expiry_date": fields.get("expiry_date") or fields.get("valid_until"),
         "issuing_authority": fields.get("issuing_authority") or fields.get("issued_by")
     }

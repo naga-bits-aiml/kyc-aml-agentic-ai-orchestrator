@@ -458,6 +458,17 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             case_id = cmd.split(' ', 2)[-1].strip().upper()
             return self._select_case(case_id)
         
+        # Handle "summarize case" or "summarize case <case_id>"
+        if cmd == 'summarize case' or cmd == 'summarize':
+            if self.case_reference:
+                return self._summarize_case(self.case_reference)
+            else:
+                return "❌ No case selected. Use 'select case <CASE_ID>' first or 'summarize case <CASE_ID>'"
+        
+        if cmd.startswith('summarize case '):
+            case_id = cmd.split(' ', 2)[-1].strip().upper()
+            return self._summarize_case(case_id)
+        
         return None
     
     def _show_cases(self, limit: int = 10) -> str:
@@ -613,6 +624,92 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         
         return f"✅ Selected case: {case_id}"
     
+    def _summarize_case(self, case_id: str) -> str:
+        """Generate and update case summary with KYC data from documents."""
+        from tools.case_summary_tools import generate_case_summary_tool, update_case_summary_tool
+        
+        case_id = case_id.upper()
+        case_dir = Path(settings.documents_dir) / "cases" / case_id
+        
+        if not case_dir.exists():
+            return f"❌ Case {case_id} not found."
+        
+        msg = f"\n📊 Generating summary for case {case_id}...\n"
+        
+        try:
+            # Generate summary from document metadata
+            result = generate_case_summary_tool.run(case_id)
+            
+            if not result.get('success'):
+                return msg + f"❌ Failed: {result.get('error', 'Unknown error')}"
+            
+            case_summary = result['case_summary']
+            
+            # Update case metadata with summary
+            update_result = update_case_summary_tool.run(case_id=case_id, case_summary=case_summary)
+            
+            if not update_result.get('success'):
+                return msg + f"❌ Failed to save: {update_result.get('error')}"
+            
+            # Format output
+            msg += "=" * 60 + "\n\n"
+            
+            # ID Proof
+            id_proof = case_summary.get('id_proof', {})
+            msg += f"🪪 ID Proof:\n"
+            if id_proof.get('documents'):
+                msg += f"   Documents: {len(id_proof['documents'])}\n"
+                extracted = id_proof.get('extracted_data', {})
+                if extracted.get('name'):
+                    msg += f"   • Name: {extracted['name']}\n"
+                if extracted.get('dob'):
+                    msg += f"   • DOB: {extracted['dob']}\n"
+                if extracted.get('father_name'):
+                    msg += f"   • Father: {extracted['father_name']}\n"
+                if extracted.get('document_number'):
+                    msg += f"   • Doc #: {extracted['document_number']}\n"
+            else:
+                msg += "   ⚠️  No documents\n"
+            
+            # Address Proof
+            addr_proof = case_summary.get('address_proof', {})
+            msg += f"\n🏠 Address Proof:\n"
+            if addr_proof.get('documents'):
+                msg += f"   Documents: {len(addr_proof['documents'])}\n"
+                extracted = addr_proof.get('extracted_data', {})
+                if extracted.get('address'):
+                    msg += f"   • Address: {extracted['address']}\n"
+            else:
+                msg += "   ⚠️  No documents\n"
+            
+            # Financial Statement
+            fin_stmt = case_summary.get('financial_statement', {})
+            msg += f"\n💰 Financial Statement:\n"
+            if fin_stmt.get('documents'):
+                msg += f"   Documents: {len(fin_stmt['documents'])}\n"
+                extracted = fin_stmt.get('extracted_data', {})
+                if extracted.get('account_number'):
+                    msg += f"   • Account: {extracted['account_number']}\n"
+            else:
+                msg += "   ⚠️  No documents\n"
+            
+            # Verification Status
+            status = case_summary.get('verification_status', 'unknown')
+            status_emoji = "✅" if status == "complete" else "⏳" if status == "partial" else "❌"
+            msg += f"\n{status_emoji} Verification Status: {status.upper()}\n"
+            
+            # Consistency
+            checks = case_summary.get('consistency_checks', {})
+            if checks.get('name_consistency', {}).get('status') == 'consistent':
+                msg += "✅ Name consistency: OK\n"
+            
+            msg += "\n💡 Case metadata updated!\n"
+            return msg
+            
+        except Exception as e:
+            logger.error(f"Error summarizing case: {e}", exc_info=True)
+            return msg + f"❌ Error: {str(e)}"
+    
     def show_help(self) -> str:
         """Show help information."""
         return """
@@ -624,6 +721,8 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
    show cases       List recent cases (10)
    show docs        List recent documents (10)
    select case <ID> Select a case and load context
+   summarize case   Generate KYC summary for selected case
+   summarize case <ID>  Generate KYC summary for specific case
    status           Show system status
    help, ?          Show this help
    reload           Reload code and restart
@@ -639,6 +738,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
 📋 Case Management:
    "create case KYC-2026-001"    Create new case
    "select case KYC-2026-001"    Select existing case
+   "summarize case"              Generate KYC summary
    "link doc DOC_xxx to case KYC-2026-001"  Link document to case
 
 📄 Document Processing:
