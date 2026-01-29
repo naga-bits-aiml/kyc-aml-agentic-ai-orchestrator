@@ -1,21 +1,21 @@
-"""Flow module initialization."""
+"""Flow module initialization.
+
+This module provides compatibility wrappers that delegate to the new pipeline_flow.
+For new development, use pipeline_flow.py and pipeline_crew.py directly.
+"""
 
 from .document_processing_flow import (
-    DocumentProcessingFlow,
-    DocumentProcessingState,
     kickoff_flow,
-    FLOW_AVAILABLE
-)
-from .flow_helpers import (
-    process_document,
-    reprocess_document
+    add_directory_to_queue,
+    add_files_to_queue,
+    get_queue_status,
+    process_next_document_from_queue
 )
 
 __all__ = [
-    'DocumentProcessingFlow',
-    'DocumentProcessingState',
     'kickoff_flow',
-    'process_document',
-    'reprocess_document',
-    'FLOW_AVAILABLE'
+    'add_directory_to_queue',
+    'add_files_to_queue',
+    'get_queue_status',
+    'process_next_document_from_queue'
 ]

@@ -4,6 +4,13 @@ Tools package for KYC-AML Agentic AI Orchestrator.
 This package contains all tools that agents can use to perform tasks.
 Tools are registered and made available to agents through the tool registry.
 Tools can also be auto-discovered from API specifications.
+
+Pipeline Agent Tools (NEW):
+- queue_tools: Scan paths, expand folders, split PDFs, build queue
+- classification_api_tools: REST API classification with retry
+- extraction_api_tools: REST API extraction with retry
+- metadata_tools: Status tracking, error handling, retry management
+- summary_tools: Processing summary and reporting
 """
 from .document_tools import (
     validate_document_tool,
@@ -28,6 +35,41 @@ from .stage_management_tools import (
     get_stage_summary,
     add_document_to_case,
     update_document_metadata_in_stage
+)
+
+# Pipeline Agent Tools - NEW
+from .queue_tools import (
+    scan_input_path,
+    expand_folder,
+    split_pdf_to_images,
+    build_processing_queue,
+    get_next_from_queue,
+    get_queue_status,
+    mark_document_processed
+)
+from .classification_api_tools import (
+    classify_document,
+    get_classification_result,
+    batch_classify_documents
+)
+from .extraction_api_tools import (
+    extract_document_data,
+    get_extraction_result,
+    batch_extract_documents
+)
+from .metadata_tools import (
+    get_document_metadata,
+    update_processing_status,
+    record_error,
+    check_retry_eligible,
+    reset_stage_for_retry,
+    flag_for_review
+)
+from .summary_tools import (
+    generate_processing_summary,
+    generate_report_text,
+    get_document_results,
+    export_results_json
 )
 
 # Lazy imports to avoid circular dependencies
@@ -83,6 +125,45 @@ ALL_TOOLS = [
     get_file_info_tool,
 ]
 
+# Pipeline Agent Tools (NEW)
+PIPELINE_QUEUE_TOOLS = [
+    scan_input_path,
+    expand_folder,
+    split_pdf_to_images,
+    build_processing_queue,
+    get_next_from_queue,
+    get_queue_status,
+    mark_document_processed,
+]
+
+PIPELINE_CLASSIFICATION_TOOLS = [
+    classify_document,
+    get_classification_result,
+    batch_classify_documents,
+]
+
+PIPELINE_EXTRACTION_TOOLS = [
+    extract_document_data,
+    get_extraction_result,
+    batch_extract_documents,
+]
+
+PIPELINE_METADATA_TOOLS = [
+    get_document_metadata,
+    update_processing_status,
+    record_error,
+    check_retry_eligible,
+    reset_stage_for_retry,
+    flag_for_review,
+]
+
+PIPELINE_SUMMARY_TOOLS = [
+    generate_processing_summary,
+    generate_report_text,
+    get_document_results,
+    export_results_json,
+]
+
 # Tools grouped by category
 DOCUMENT_TOOLS = [
     validate_document_tool,
@@ -114,6 +195,12 @@ def _initialize_all_tools():
     if CLASSIFIER_TOOLS is None:
         CLASSIFIER_TOOLS = _get_classifier_tools()
         ALL_TOOLS.extend(CLASSIFIER_TOOLS)
+        # Also add pipeline tools
+        ALL_TOOLS.extend(PIPELINE_QUEUE_TOOLS)
+        ALL_TOOLS.extend(PIPELINE_CLASSIFICATION_TOOLS)
+        ALL_TOOLS.extend(PIPELINE_EXTRACTION_TOOLS)
+        ALL_TOOLS.extend(PIPELINE_METADATA_TOOLS)
+        ALL_TOOLS.extend(PIPELINE_SUMMARY_TOOLS)
 
 
 def _get_tool_registry():
@@ -125,6 +212,12 @@ def _get_tool_registry():
         'classifier': CLASSIFIER_TOOLS or [],
         'extraction': EXTRACTION_TOOLS,
         'file': FILE_TOOLS,
+        # Pipeline tool categories
+        'pipeline_queue': PIPELINE_QUEUE_TOOLS,
+        'pipeline_classification': PIPELINE_CLASSIFICATION_TOOLS,
+        'pipeline_extraction': PIPELINE_EXTRACTION_TOOLS,
+        'pipeline_metadata': PIPELINE_METADATA_TOOLS,
+        'pipeline_summary': PIPELINE_SUMMARY_TOOLS,
     }
 
 
@@ -133,7 +226,9 @@ def get_tools(category: str = 'all'):
     Get tools by category.
     
     Args:
-        category: Tool category ('all', 'document', 'classifier', 'extraction', 'file')
+        category: Tool category ('all', 'document', 'classifier', 'extraction', 'file',
+                  'pipeline_queue', 'pipeline_classification', 'pipeline_extraction',
+                  'pipeline_metadata', 'pipeline_summary')
         
     Returns:
         List of tools in the specified category
@@ -147,7 +242,8 @@ def get_tools_for_agent(agent_type: str):
     Get appropriate tools for a specific agent type.
     
     Args:
-        agent_type: Type of agent ('intake', 'classifier', 'extraction', 'general')
+        agent_type: Type of agent ('intake', 'classifier', 'extraction', 'general',
+                    'queue', 'metadata', 'summary')
         
     Returns:
         List of tools appropriate for the agent

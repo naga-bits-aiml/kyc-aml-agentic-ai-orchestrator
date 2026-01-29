@@ -1,6 +1,6 @@
 """
 Chat interface tools for LLM tool calling.
-These tools enable the LLM to interact with the KYC-AML system.
+These tools enable the LLM to interact with the KYC-AML system via pipeline agents.
 """
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -617,20 +617,23 @@ def create_chat_tools(chat_interface):
     
     @tool
     def submit_documents_for_processing(file_paths: str, case_reference: Optional[str] = None) -> str:
-        """Submit documents for processing - NO CASE REQUIRED.
+        """Submit documents for processing using pipeline agents - NO CASE REQUIRED.
         
         Documents can be processed independently and linked to cases later if needed.
         Each document gets a globally unique ID (e.g., DOC_20260127_143022_A3F8B).
         
-        This tool processes documents through the CrewAI pipeline for:
-        - Document intake and validation (generates unique document ID)
-        - Classification (passport, driver's license, utility bill, etc.)
-        - Data extraction (names, dates, addresses, document numbers)
+        This tool processes documents through the CrewAI pipeline agents:
+        - QueueAgent: Scans paths and builds processing queue
+        - ClassificationAgent: Classifies documents via REST API
+        - ExtractionAgent: Extracts data via REST API
+        - MetadataAgent: Tracks status and handles errors
+        - SummaryAgent: Generates processing report
         
         Args:
             file_paths: Document path(s). Can be:
                 - Single path: "~/Downloads/passport.pdf"
                 - Multiple paths (comma-separated): "~/Downloads/passport.pdf, ~/Documents/bill.pdf"
+                - Folder path: "~/Documents/kyc_docs"
                 - With spaces: "~/My Documents/file.pdf"
             case_reference: OPTIONAL case ID. If not provided, documents are processed independently.
                            Use link_document_to_case later to associate with cases.
@@ -640,9 +643,10 @@ def create_chat_tools(chat_interface):
             
         Examples:
             submit_documents_for_processing("~/Downloads/passport.pdf")  # No case needed
+            submit_documents_for_processing("~/Documents/kyc_docs")  # Process entire folder
             submit_documents_for_processing("~/Downloads/policy.pdf", case_reference="KYC-2026-001")
         """
-        from flows.document_processing_flow import kickoff_flow
+        from pipeline_flow import run_pipeline_sync
         import re
         
         case_ref = case_reference or chat_interface.case_reference
@@ -660,10 +664,10 @@ def create_chat_tools(chat_interface):
             # Expand tilde and resolve
             try:
                 path = Path(raw_path).expanduser().resolve()
-                if path.exists() and path.is_file():
+                if path.exists():
                     paths.append(str(path))
                 else:
-                    return f"❌ File not found: {raw_path}\n   (Expanded to: {path})"
+                    return f"❌ Path not found: {raw_path}\n   (Expanded to: {path})"
             except Exception as e:
                 return f"❌ Invalid path '{raw_path}': {str(e)}"
         
@@ -671,7 +675,7 @@ def create_chat_tools(chat_interface):
             return "❌ No valid file paths provided"
         
         try:
-            msg = f"🚀 Processing {len(paths)} document(s) through CrewAI pipeline...\n"
+            msg = f"🚀 Processing {len(paths)} path(s) through Pipeline Agents...\n"
             if case_ref:
                 msg += f"   📁 Case: {case_ref}\n"
             else:
@@ -680,93 +684,47 @@ def create_chat_tools(chat_interface):
             for i, p in enumerate(paths, 1):
                 msg += f"   {i}. {Path(p).name}\n"
             
-            # Call CrewAI flow (case_id is optional now)
-            result = kickoff_flow(
-                file_paths=paths,
-                case_id=case_ref,  # Can be None
-                llm=chat_interface.llm
-            )
+            # Use the new pipeline (process first path - can be file or folder)
+            result = run_pipeline_sync(paths[0])
             
             # Format results
             msg += f"\n✅ Processing Complete!\n\n"
             
             if isinstance(result, dict):
-                # Check for errors first
-                if result.get('errors'):
-                    msg += f"⚠️  Errors encountered:\n"
-                    for error in result['errors'][:5]:  # Show first 5 errors
-                        msg += f"   • {error}\n"
-                    if len(result['errors']) > 5:
-                        msg += f"   ... and {len(result['errors']) - 5} more errors\n"
-                    msg += f"\n"
-                
-                # Show status
-                status = result.get('status', 'unknown')
-                if status == 'failed':
-                    msg += f"❌ Status: FAILED\n\n"
-                elif status == 'partial':
-                    msg += f"⚠️  Status: PARTIAL (some documents failed)\n\n"
-                elif status == 'requires_review':
-                    msg += f"⚠️  Status: REQUIRES REVIEW\n\n"
+                # Check for success
+                if result.get('success'):
+                    summary = result.get('summary', {})
+                    stats = summary.get('statistics', {})
+                    
+                    msg += f"📊 Results:\n"
+                    msg += f"   • Total: {stats.get('total_documents', 0)}\n"
+                    msg += f"   • Completed: {stats.get('completed', 0)}\n"
+                    msg += f"   • Failed: {stats.get('failed', 0)}\n"
+                    
+                    # Show document types
+                    by_type = summary.get('by_document_type', {})
+                    if by_type:
+                        msg += f"\n📋 Document Types:\n"
+                        for doc_type, count in by_type.items():
+                            msg += f"   • {doc_type}: {count}\n"
+                    
+                    # Show processed document IDs
+                    processed = result.get('processed_documents', [])
+                    if processed:
+                        msg += f"\n📄 Processed Documents:\n"
+                        for doc_id in processed[:10]:
+                            msg += f"   • {doc_id}\n"
+                        if len(processed) > 10:
+                            msg += f"   ... and {len(processed) - 10} more\n"
                 else:
-                    msg += f"✅ Status: {status.upper()}\n\n"
-                
-                # Show document IDs if available
-                if 'validated_documents' in result and result['validated_documents']:
-                    msg += f"📄 Documents Processed:\n"
-                    for doc in result['validated_documents'][:10]:  # Show first 10
-                        doc_id = doc.get('document_id', 'Unknown')
-                        filename = doc.get('original_filename', 'Unknown')
-                        msg += f"   • {doc_id}: {filename}\n"
-                    if len(result['validated_documents']) > 10:
-                        msg += f"   ... and {len(result['validated_documents']) - 10} more\n"
-                elif status != 'failed':
-                    msg += f"⚠️  No documents were validated\n"
-                
-                # Show document summary statistics
-                if 'documents' in result and isinstance(result['documents'], dict):
-                    doc_stats = result['documents']
-                    msg += f"\n📊 Summary:\n"
-                    msg += f"   • Total: {doc_stats.get('total', 0)}\n"
-                    msg += f"   • Successful: {doc_stats.get('successful', 0)}\n"
-                    msg += f"   • Failed: {doc_stats.get('failed', 0)}\n"
-                
-                # Check for child documents that need processing
-                child_docs = result.get('child_documents_pending', [])
-                if child_docs:
-                    msg += f"\n👶 Child Documents Detected:\n"
-                    msg += f"   Found {len(child_docs)} child document(s) that need processing.\n"
-                    for child in child_docs[:5]:  # Show first 5
-                        parent_id = child.get('parent_id', 'unknown')
-                        msg += f"   • {child.get('document_id', 'unknown')} (from {parent_id})\n"
-                    if len(child_docs) > 5:
-                        msg += f"   ... and {len(child_docs) - 5} more\n"
-
-                    msg += f"\n⏭️  Auto-processing child documents in a second run...\n"
-                    child_result = kickoff_flow(
-                        file_paths=[],
-                        case_id=case_ref,
-                        llm=chat_interface.llm,
-                        processing_mode="process"
-                    )
-                    if isinstance(child_result, dict):
-                        child_status = child_result.get('status', 'unknown')
-                        msg += f"   Child run status: {child_status}\n"
-                        child_docs_processed = child_result.get('documents', {})
-                        msg += (
-                            f"   Child docs processed: total={child_docs_processed.get('total', 0)}, "
-                            f"successful={child_docs_processed.get('successful', 0)}, "
-                            f"failed={child_docs_processed.get('failed', 0)}\n"
-                        )
-                    else:
-                        msg += f"   Child run result: {child_result}\n"
+                    msg += f"⚠️  Error: {result.get('error', 'Unknown error')}\n"
                 
                 # Suggest next steps
-                if not case_ref and result.get('validated_documents'):
-                    doc_ids = [d.get('document_id') for d in result['validated_documents'] if d.get('document_id')]
-                    if doc_ids:
+                if not case_ref:
+                    processed = result.get('processed_documents', [])
+                    if processed:
                         msg += f"\n💡 Next: Link documents to a case using:\n"
-                        msg += f"   'link document {doc_ids[0]} to case KYC-2026-XXX'\n"
+                        msg += f"   'link document {processed[0]} to case KYC-2026-XXX'\n"
             else:
                 msg += f"📋 Result: {result}\n"
             
@@ -785,7 +743,7 @@ def create_chat_tools(chat_interface):
         This tool:
         1. Loads the document's metadata from documents/intake/
         2. Checks which stages are pending
-        3. Automatically resumes processing from the appropriate stage
+        3. Automatically resumes processing from the appropriate stage using pipeline agents
         
         Use this when a user provides a document ID like "DOC_20260127_190130_8A0B7".
         
@@ -796,6 +754,10 @@ def create_chat_tools(chat_interface):
             Processing results with stage completion status.
         """
         try:
+            from tools.classification_api_tools import classify_document
+            from tools.extraction_api_tools import extract_document_data
+            from tools.metadata_tools import update_processing_status, get_document_metadata
+            
             # Find document metadata in intake directory
             intake_dir = Path(settings.documents_dir) / "intake"
             metadata_path = intake_dir / f"{document_id}.metadata.json"
@@ -807,77 +769,83 @@ def create_chat_tools(chat_interface):
             with open(metadata_path, 'r') as f:
                 metadata = json.load(f)
             
-            # Check if it has the new structure with stage blocks
-            required_blocks = ['intake', 'classification', 'extraction']
-            has_stage_blocks = all(stage in metadata for stage in required_blocks)
+            # Check stages
+            classification = metadata.get('classification', {})
+            extraction = metadata.get('extraction', {})
             
-            if not has_stage_blocks:
-                missing = [s for s in required_blocks if s not in metadata]
-                return f"⚠️  Document {document_id} uses old metadata format.\n   Missing blocks: {', '.join(missing)}\n   Please re-upload the document for processing."
-            
-            # Check what needs to be processed
-            intake_status = metadata.get('intake', {}).get('status', 'pending')
-            classification_status = metadata.get('classification', {}).get('status', 'pending')
-            extraction_status = metadata.get('extraction', {}).get('status', 'pending')
-            
-            if intake_status != 'success':
-                return f"❌ Document {document_id} intake failed. Please re-upload the document."
+            classification_status = classification.get('status', 'pending')
+            extraction_status = extraction.get('status', 'pending')
             
             # Build status message
             msg = f"\n📄 Document: {document_id}\n"
             msg += f"   📁 File: {metadata.get('original_filename', 'unknown')}\n\n"
             msg += f"Stage Status:\n"
-            msg += f"   ✅ Intake: {intake_status}\n"
-            msg += f"   {'✅' if classification_status == 'success' else '⏳'} Classification: {classification_status}\n"
-            msg += f"   {'✅' if extraction_status == 'success' else '⏳'} Extraction: {extraction_status}\n\n"
+            msg += f"   ✅ Intake: completed\n"
+            msg += f"   {'✅' if classification_status == 'completed' else '⏳'} Classification: {classification_status}\n"
+            msg += f"   {'✅' if extraction_status == 'completed' else '⏳'} Extraction: {extraction_status}\n\n"
             
-            # Determine what to do
-            if classification_status == 'success' and extraction_status == 'success':
+            # Check if already complete
+            if classification_status == 'completed' and extraction_status == 'completed':
                 return msg + "✨ All stages completed! Document fully processed."
-            
-            # Resume processing
-            msg += "🚀 Resuming processing...\n\n"
             
             # Get stored document path
             stored_path = metadata.get('stored_path')
             if not stored_path or not Path(stored_path).exists():
                 return f"❌ Document file not found at: {stored_path}"
             
-            # Use flow to process from current state
-            from flows.document_processing_flow import kickoff_flow
+            # Resume processing with pipeline agents
+            msg += "🚀 Resuming processing with Pipeline Agents...\n\n"
             
-            result = kickoff_flow(
-                file_paths=[stored_path],
-                case_id=None,  # Case-agnostic processing
-                llm=chat_interface.llm
-            )
+            doc_type = None
             
-            if result:
-                msg += f"✅ Processing completed!\n\n"
+            # Classification if needed
+            if classification_status != 'completed':
+                msg += "📋 Running ClassificationAgent...\n"
+                class_result = classify_document(stored_path)
                 
-                # Show stage metadata from result
-                if 'stage_metadata' in result:
-                    stage_meta = result['stage_metadata']
-                    for stage_name in ['intake', 'classification', 'extraction']:
-                        stage_info = stage_meta.get(stage_name, {})
-                        status = stage_info.get('status', 'unknown')
-                        stage_msg = stage_info.get('msg', '')
-                        icon = '✅' if status == 'success' else ('❌' if status == 'fail' else '⏳')
-                        msg += f"   {icon} {stage_name.title()}: {status}\n"
-                        if stage_msg:
-                            msg += f"      {stage_msg}\n"
-                
-                # Show case readiness
-                if 'case_readiness' in result:
-                    readiness = result['case_readiness']
-                    is_complete = readiness.get('is_complete', False)
-                    msg += f"\n{'✨' if is_complete else '⚠️'}  Case Readiness: {'Complete' if is_complete else 'Incomplete'}\n"
+                if class_result.get('success'):
+                    doc_type = class_result.get('document_type')
+                    confidence = class_result.get('confidence', 0)
+                    msg += f"   ✅ Classified as: {doc_type} (confidence: {confidence:.1%})\n"
                     
-                    recommendations = readiness.get('recommendations', [])
-                    if recommendations:
-                        msg += "\n💡 Recommendations:\n"
-                        for rec in recommendations:
-                            msg += f"   • {rec}\n"
+                    # Update metadata
+                    update_processing_status(document_id, 'classification', 'completed', {
+                        'document_type': doc_type,
+                        'confidence': confidence
+                    })
+                else:
+                    msg += f"   ❌ Classification failed: {class_result.get('error')}\n"
+                    return msg
+            else:
+                doc_type = classification.get('document_type')
+                msg += f"   ✅ Classification: already completed ({doc_type})\n"
+            
+            # Extraction if needed
+            if extraction_status != 'completed':
+                msg += "\n📊 Running ExtractionAgent...\n"
+                extract_result = extract_document_data(stored_path, doc_type)
+                
+                if extract_result.get('success'):
+                    extracted_fields = extract_result.get('extracted_fields', {})
+                    msg += f"   ✅ Extracted {len(extracted_fields)} field(s)\n"
+                    
+                    # Show some fields
+                    for field, value in list(extracted_fields.items())[:5]:
+                        msg += f"      • {field}: {value}\n"
+                    if len(extracted_fields) > 5:
+                        msg += f"      ... and {len(extracted_fields) - 5} more\n"
+                    
+                    # Update metadata
+                    update_processing_status(document_id, 'extraction', 'completed', {
+                        'extracted_fields': extracted_fields
+                    })
+                else:
+                    msg += f"   ❌ Extraction failed: {extract_result.get('error')}\n"
+                    return msg
+            else:
+                msg += f"   ✅ Extraction: already completed\n"
+            
+            msg += f"\n✨ Document {document_id} fully processed!"
             
             return msg
             
@@ -1067,47 +1035,30 @@ def create_chat_tools(chat_interface):
         Returns:
             Queue status with document counts and list of pending documents.
         """
-        from utilities.queue_manager import DocumentQueue
+        from tools.queue_tools import get_queue_status
         
         try:
-            queue = DocumentQueue()
-            result = {
-                "status": queue.get_status(),
-                "pending": queue.get_all_pending(),
-                "failed": queue.get_all_failed()
-            }
-            status = result['status']
-            pending = result['pending']
-            failed = result['failed']
+            status = get_queue_status()
             
             msg = "\n📊 Queue Status\n"
             msg += "=" * 60 + "\n\n"
             msg += f"📋 Summary:\n"
-            msg += f"   • Pending: {status['pending']}\n"
-            msg += f"   • Processing: {status['processing']}\n"
-            msg += f"   • Failed: {status['failed']}\n"
-            msg += f"   • Total in queue: {status['total_queue']}\n"
-            msg += f"   • Total processed: {status['total_processed']}\n\n"
+            msg += f"   • Pending: {status.get('pending', 0)}\n"
+            msg += f"   • Processing: {status.get('processing', 0)}\n"
+            msg += f"   • Completed: {status.get('completed', 0)}\n"
+            msg += f"   • Failed: {status.get('failed', 0)}\n"
+            msg += f"   • Total: {status.get('total', 0)}\n\n"
             
-            if pending:
-                msg += f"📄 Pending Documents ({len(pending)}):\n"
-                for entry in pending[:10]:  # Show first 10
-                    file_name = Path(entry['source_path']).name
-                    source = entry['source_type']
-                    priority = entry.get('priority', 1)
-                    msg += f"   • {file_name} (source: {source}, priority: {priority})\n"
-                if len(pending) > 10:
-                    msg += f"   ... and {len(pending) - 10} more\n"
-                msg += "\n"
-            
-            if failed:
-                msg += f"❌ Failed Documents ({len(failed)}):\n"
-                for entry in failed[:5]:  # Show first 5
-                    file_name = Path(entry['source_path']).name
-                    error = entry.get('error', 'Unknown error')
-                    msg += f"   • {file_name}: {error}\n"
-                if len(failed) > 5:
-                    msg += f"   ... and {len(failed) - 5} more\n"
+            # Show pending documents if available
+            pending_docs = status.get('pending_documents', [])
+            if pending_docs:
+                msg += f"📄 Pending Documents ({len(pending_docs)}):\n"
+                for doc in pending_docs[:10]:
+                    doc_id = doc.get('document_id', 'unknown')
+                    filename = doc.get('original_filename', 'unknown')
+                    msg += f"   • {doc_id}: {filename}\n"
+                if len(pending_docs) > 10:
+                    msg += f"   ... and {len(pending_docs) - 10} more\n"
             
             return msg
         except Exception as e:
@@ -1116,48 +1067,67 @@ def create_chat_tools(chat_interface):
     
     @tool
     def process_next_from_queue() -> str:
-        """Process the next document from the queue.
+        """Process the next document from the queue using pipeline agents.
         
         Takes the next pending document from the queue and processes it through
-        the complete workflow (classification and extraction).
+        the complete workflow (classification and extraction) using pipeline agents.
         
         Returns:
             Processing result for the document.
         """
-        from flows.document_processing_flow import process_next_document_from_queue
+        from tools.queue_tools import get_next_from_queue, mark_document_processed
+        from tools.classification_api_tools import classify_document
+        from tools.extraction_api_tools import extract_document_data
         
         try:
-            result = process_next_document_from_queue(
-                processing_mode='process',
-                case_id=chat_interface.case_reference,
-                llm=chat_interface.llm,
-                auto_drain=False
-            )
+            # Get next document from queue
+            next_doc = get_next_from_queue()
             
-            if result['status'] == 'complete':
+            if not next_doc.get('success') or not next_doc.get('document'):
                 return "✅ Queue is empty - no more documents to process."
-            elif result['status'] == 'success':
-                doc_id = result.get('document_id', 'UNKNOWN')
-                stage_results = result.get('stage_results', {})
-                msg = f"✅ Successfully processed: {doc_id}\n\n"
-                msg += f"📊 Results:\n"
-                for stage, stage_result in stage_results.items():
-                    status = stage_result.get('status', 'unknown')
-                    msg += f"   • {stage}: {status}\n"
-                return msg
-            elif result['status'] == 'failed':
-                queue_id = result.get('queue_id', 'UNKNOWN')
-                error = result.get('error', 'Unknown error')
-                return f"❌ Failed to process: {queue_id}\n   Error: {error}"
+            
+            doc = next_doc['document']
+            doc_id = doc.get('document_id')
+            file_path = doc.get('stored_path')
+            
+            msg = f"🚀 Processing: {doc_id}\n\n"
+            
+            # Classification
+            msg += "📋 Running ClassificationAgent...\n"
+            class_result = classify_document(file_path)
+            
+            if class_result.get('success'):
+                doc_type = class_result.get('document_type')
+                confidence = class_result.get('confidence', 0)
+                msg += f"   ✅ Classified as: {doc_type} (confidence: {confidence:.1%})\n\n"
+                
+                # Extraction
+                msg += "📊 Running ExtractionAgent...\n"
+                extract_result = extract_document_data(file_path, doc_type)
+                
+                if extract_result.get('success'):
+                    extracted_fields = extract_result.get('extracted_fields', {})
+                    msg += f"   ✅ Extracted {len(extracted_fields)} field(s)\n"
+                    
+                    # Mark as completed
+                    mark_document_processed(doc_id, 'completed')
+                    msg += f"\n✅ Document {doc_id} fully processed!"
+                else:
+                    mark_document_processed(doc_id, 'failed', extract_result.get('error'))
+                    msg += f"   ❌ Extraction failed: {extract_result.get('error')}"
             else:
-                return f"⚠️  Unexpected result: {result.get('message', 'Unknown')}"
+                mark_document_processed(doc_id, 'failed', class_result.get('error'))
+                msg += f"   ❌ Classification failed: {class_result.get('error')}"
+            
+            return msg
+            
         except Exception as e:
             logger.error(f"Error processing from queue: {e}")
             return f"❌ Error: {str(e)}"
     
     @tool
     def process_all_queued_documents(max_documents: Optional[int] = None) -> str:
-        """Process all documents in the queue.
+        """Process all documents in the queue using pipeline agents.
         
         Processes all pending documents in the queue one by one until the queue
         is empty or the maximum number is reached.
@@ -1168,14 +1138,15 @@ def create_chat_tools(chat_interface):
         Returns:
             Summary of processing results for all documents.
         """
-        from flows.document_processing_flow import process_next_document_from_queue
+        from tools.queue_tools import get_next_from_queue, mark_document_processed, get_queue_status
+        from tools.classification_api_tools import classify_document
+        from tools.extraction_api_tools import extract_document_data
         
         try:
             processed_count = 0
             failed_count = 0
-            skipped_count = 0
             
-            msg = "\n🚀 Processing documents from queue...\n"
+            msg = "\n🚀 Processing documents from queue with Pipeline Agents...\n"
             msg += "=" * 60 + "\n\n"
             
             while True:
@@ -1184,29 +1155,38 @@ def create_chat_tools(chat_interface):
                     msg += f"\n⏸️  Reached maximum of {max_documents} documents.\n"
                     break
                 
-                # Process next document
-                result = process_next_document_from_queue(
-                    processing_mode='process',
-                    case_id=chat_interface.case_reference,
-                    llm=chat_interface.llm,
-                    auto_drain=False
-                )
+                # Get next document
+                next_doc = get_next_from_queue()
                 
-                if result['status'] == 'complete':
+                if not next_doc.get('success') or not next_doc.get('document'):
                     msg += "\n✅ Queue is now empty.\n"
                     break
-                elif result['status'] == 'success':
-                    processed_count += 1
-                    doc_id = result.get('document_id', 'UNKNOWN')
-                    msg += f"✅ Processed #{processed_count}: {doc_id}\n"
-                elif result['status'] == 'failed':
+                
+                doc = next_doc['document']
+                doc_id = doc.get('document_id')
+                file_path = doc.get('stored_path')
+                
+                # Classification
+                class_result = classify_document(file_path)
+                
+                if class_result.get('success'):
+                    doc_type = class_result.get('document_type')
+                    
+                    # Extraction
+                    extract_result = extract_document_data(file_path, doc_type)
+                    
+                    if extract_result.get('success'):
+                        mark_document_processed(doc_id, 'completed')
+                        processed_count += 1
+                        msg += f"✅ Processed #{processed_count}: {doc_id} ({doc_type})\n"
+                    else:
+                        mark_document_processed(doc_id, 'failed', extract_result.get('error'))
+                        failed_count += 1
+                        msg += f"❌ Failed #{processed_count + failed_count}: {doc_id} (extraction)\n"
+                else:
+                    mark_document_processed(doc_id, 'failed', class_result.get('error'))
                     failed_count += 1
-                    queue_id = result.get('queue_id', 'UNKNOWN')
-                    error = result.get('error', 'Unknown error')
-                    msg += f"❌ Failed #{failed_count}: {queue_id} - {error}\n"
-                elif result['status'] == 'skipped':
-                    skipped_count += 1
-                    msg += f"⏭️  Skipped document #{skipped_count}\n"
+                    msg += f"❌ Failed #{processed_count + failed_count}: {doc_id} (classification)\n"
             
             # Summary
             msg += f"\n📊 Processing Complete\n"
@@ -1214,8 +1194,7 @@ def create_chat_tools(chat_interface):
             msg += f"Results:\n"
             msg += f"   • Processed: {processed_count}\n"
             msg += f"   • Failed: {failed_count}\n"
-            msg += f"   • Skipped: {skipped_count}\n"
-            msg += f"   • Total: {processed_count + failed_count + skipped_count}\n"
+            msg += f"   • Total: {processed_count + failed_count}\n"
             
             return msg
         except Exception as e:
@@ -1237,35 +1216,30 @@ def create_chat_tools(chat_interface):
         Returns:
             Confirmation with count of added documents.
         """
-        from utilities.queue_manager import DocumentQueue
+        from tools.queue_tools import build_processing_queue, get_queue_status
         
         try:
-            queue = DocumentQueue()
-            queue_ids = queue.add_directory(directory_path, priority=priority)
-            if not queue_ids:
-                result = {
-                    "status": "failed",
-                    "message": "No valid documents found in directory",
-                    "queue_ids": []
-                }
-            else:
-                result = {
-                    "status": "success",
-                    "message": f"Added {len(queue_ids)} documents to queue from {directory_path}",
-                    "queue_ids": queue_ids,
-                    "queue_status": queue.get_status()
-                }
+            # Expand path
+            dir_path = Path(directory_path).expanduser().resolve()
             
-            if result['status'] == 'success':
-                msg = f"✅ {result['message']}\n\n"
+            if not dir_path.exists():
+                return f"❌ Directory not found: {directory_path}"
+            
+            if not dir_path.is_dir():
+                return f"❌ Path is not a directory: {directory_path}"
+            
+            # Build queue from directory
+            result = build_processing_queue(str(dir_path))
+            
+            if result.get('success'):
+                msg = f"✅ Added {result.get('queued_count', 0)} documents to queue\n\n"
                 msg += f"📊 Queue Status:\n"
-                status = result['queue_status']
-                msg += f"   • Pending: {status['pending']}\n"
-                msg += f"   • Total in queue: {status['total_queue']}\n"
-                msg += f"   • Processed: {status['total_processed']}\n"
+                status = get_queue_status()
+                msg += f"   • Pending: {status.get('pending', 0)}\n"
+                msg += f"   • Total: {status.get('total', 0)}\n"
                 return msg
             else:
-                return f"❌ {result['message']}"
+                return f"❌ {result.get('error', 'Failed to build queue')}"
         except Exception as e:
             logger.error(f"Error adding directory to queue: {e}")
             return f"❌ Error: {str(e)}"
@@ -1284,26 +1258,96 @@ def create_chat_tools(chat_interface):
         Returns:
             Confirmation with count of added documents.
         """
-        from flows.document_processing_flow import add_files_to_queue as add_files
+        from tools.queue_tools import build_processing_queue, get_queue_status
         
         try:
             # Parse comma-separated paths
             paths = [p.strip() for p in file_paths.split(',')]
+            total_queued = 0
             
-            result = add_files(paths, priority=priority)
+            for path in paths:
+                # Expand path
+                file_path = Path(path).expanduser().resolve()
+                
+                if file_path.exists():
+                    result = build_processing_queue(str(file_path))
+                    if result.get('success'):
+                        total_queued += result.get('queued_count', 0)
             
-            if result['status'] == 'success':
-                msg = f"✅ {result['message']}\n\n"
+            if total_queued > 0:
+                msg = f"✅ Added {total_queued} document(s) to queue\n\n"
                 msg += f"📊 Queue Status:\n"
-                status = result['queue_status']
-                msg += f"   • Pending: {status['pending']}\n"
-                msg += f"   • Total in queue: {status['total_queue']}\n"
-                msg += f"   • Processed: {status['total_processed']}\n"
+                status = get_queue_status()
+                msg += f"   • Pending: {status.get('pending', 0)}\n"
+                msg += f"   • Total: {status.get('total', 0)}\n"
                 return msg
             else:
-                return f"❌ {result['message']}"
+                return f"❌ No valid documents found in provided paths"
         except Exception as e:
             logger.error(f"Error adding files to queue: {e}")
+            return f"❌ Error: {str(e)}"
+    
+    @tool
+    def run_document_pipeline(input_path: str) -> str:
+        """Run the full document processing pipeline on a file or folder.
+        
+        This is the primary tool for processing documents through all 5 pipeline agents:
+        1. QueueAgent: Scans path, expands folders, splits PDFs, builds queue
+        2. ClassificationAgent: Classifies each document via REST API
+        3. ExtractionAgent: Extracts data via REST API
+        4. MetadataAgent: Tracks status and handles errors
+        5. SummaryAgent: Generates processing report
+        
+        Args:
+            input_path: Path to a file or folder to process
+            
+        Returns:
+            Processing summary with statistics and results.
+        """
+        from pipeline_flow import run_pipeline_sync
+        
+        try:
+            # Expand path
+            path = Path(input_path).expanduser().resolve()
+            
+            if not path.exists():
+                return f"❌ Path not found: {input_path}"
+            
+            msg = f"🚀 Running Pipeline Agents on: {path.name}\n"
+            msg += "=" * 60 + "\n\n"
+            
+            # Run the pipeline
+            result = run_pipeline_sync(str(path))
+            
+            if result.get('success'):
+                summary = result.get('summary', {})
+                stats = summary.get('statistics', {})
+                
+                msg += f"✅ Pipeline Complete!\n\n"
+                msg += f"📊 Results:\n"
+                msg += f"   • Total Documents: {stats.get('total_documents', 0)}\n"
+                msg += f"   • Completed: {stats.get('completed', 0)}\n"
+                msg += f"   • Failed: {stats.get('failed', 0)}\n"
+                msg += f"   • Skipped: {stats.get('skipped', 0)}\n"
+                
+                # Show document types
+                by_type = summary.get('by_document_type', {})
+                if by_type:
+                    msg += f"\n📋 Classification Results:\n"
+                    for doc_type, count in by_type.items():
+                        msg += f"   • {doc_type}: {count}\n"
+                
+                # Show processing time
+                duration = result.get('duration_seconds', 0)
+                if duration:
+                    msg += f"\n⏱️  Processing Time: {duration:.1f} seconds\n"
+            else:
+                msg += f"❌ Pipeline failed: {result.get('error', 'Unknown error')}\n"
+            
+            return msg
+            
+        except Exception as e:
+            logger.error(f"Error running pipeline: {e}")
             return f"❌ Error: {str(e)}"
     
     return [
@@ -1321,8 +1365,9 @@ def create_chat_tools(chat_interface):
         submit_documents_for_processing,
         process_document_by_id,
         reset_document_stage,
-        link_document_to_case,  # Manual document linking (fallback)
-        view_queue_status,  # Queue management
+        link_document_to_case,
+        run_document_pipeline,  # NEW: Full pipeline execution
+        view_queue_status,
         process_next_from_queue,
         process_all_queued_documents,
         add_directory_to_queue,

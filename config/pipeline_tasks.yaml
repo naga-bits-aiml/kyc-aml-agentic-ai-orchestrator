@@ -1,0 +1,271 @@
+# Document Processing Pipeline - Task Configurations
+#
+# Tasks for each agent in the document processing pipeline.
+# Each task defines inputs, expected outputs, and processing instructions.
+
+# ==================== QUEUE AGENT TASKS ====================
+
+build_queue_task:
+  description: >
+    Build the document processing queue from the input path.
+    
+    INPUT:
+    - input_path: {input_path}
+    
+    STEPS:
+    1. Call scan_input_path(input_path) to determine if it's a file or folder
+    2. If folder: Call expand_folder(folder_path) to get all files
+    3. Call build_processing_queue(file_paths) which will:
+       - For PDFs: Split into page images and create child documents
+       - For images: Queue directly
+       - Create metadata JSON for each document
+    4. Return the queue status
+    
+    IMPORTANT:
+    - Use tools for all file operations - never guess
+    - PDFs must be split into page images
+    - Each document gets a unique ID and metadata file
+    
+  expected_output: >
+    JSON with queue status:
+    {
+      "success": true,
+      "queue": ["DOC_xxx", "DOC_yyy", ...],
+      "pdf_parents": ["DOC_aaa", ...],
+      "total_documents": N,
+      "message": "Queued N documents from M PDFs"
+    }
+
+
+get_next_document_task:
+  description: >
+    Get the next document from the queue for processing.
+    
+    STEPS:
+    1. Call get_next_from_queue() to get the next document ID
+    2. Return the document ID and remaining queue count
+    
+    This task is called in a loop until the queue is empty.
+    
+  expected_output: >
+    JSON with next document:
+    {
+      "has_next": true/false,
+      "document_id": "DOC_xxx" or null,
+      "remaining": N,
+      "message": "Processing document: DOC_xxx"
+    }
+
+
+# ==================== CLASSIFICATION AGENT TASKS ====================
+
+classify_document_task:
+  description: >
+    Classify a single document using the external classification API.
+    
+    INPUT:
+    - document_id: {document_id}
+    
+    STEPS:
+    1. Call classify_document(document_id) to send to classification API
+    2. The tool handles retry logic automatically
+    3. Metadata is updated with classification result
+    4. Return the classification result
+    
+    RETRY POLICY:
+    - Up to 3 retries with exponential backoff
+    - 5xx errors and 429 are retried
+    - 4xx errors (except 429) are permanent failures
+    
+  expected_output: >
+    JSON with classification result:
+    {
+      "success": true/false,
+      "document_id": "DOC_xxx",
+      "document_type": "passport" or null,
+      "confidence": 0.95 or null,
+      "error": null or "error message"
+    }
+
+
+batch_classify_task:
+  description: >
+    Classify multiple documents in sequence.
+    
+    INPUT:
+    - document_ids: {document_ids}
+    
+    STEPS:
+    1. Call batch_classify_documents(document_ids)
+    2. Returns results for all documents
+    
+  expected_output: >
+    JSON with batch results:
+    {
+      "success": true/false,
+      "total": N,
+      "succeeded": M,
+      "failed": K,
+      "results": [...]
+    }
+
+
+# ==================== EXTRACTION AGENT TASKS ====================
+
+extract_document_task:
+  description: >
+    Extract structured data from a classified document.
+    
+    INPUT:
+    - document_id: {document_id}
+    - document_type: {document_type} (optional, from classification)
+    
+    STEPS:
+    1. Call extract_document_data(document_id, document_type)
+    2. The tool handles retry logic automatically
+    3. Metadata is updated with extracted fields
+    4. Return the extraction result
+    
+    The document_type helps the extraction API know which fields to look for.
+    
+  expected_output: >
+    JSON with extraction result:
+    {
+      "success": true/false,
+      "document_id": "DOC_xxx",
+      "document_type": "passport",
+      "extracted_fields": {
+        "full_name": "John Doe",
+        "date_of_birth": "1990-01-15",
+        ...
+      },
+      "error": null or "error message"
+    }
+
+
+batch_extract_task:
+  description: >
+    Extract data from multiple documents in sequence.
+    
+    INPUT:
+    - document_ids: {document_ids}
+    
+    STEPS:
+    1. Call batch_extract_documents(document_ids)
+    2. Returns results for all documents
+    
+  expected_output: >
+    JSON with batch results:
+    {
+      "success": true/false,
+      "total": N,
+      "succeeded": M,
+      "failed": K,
+      "results": [...]
+    }
+
+
+# ==================== METADATA AGENT TASKS ====================
+
+update_status_task:
+  description: >
+    Update the processing status for a document stage.
+    
+    INPUT:
+    - document_id: {document_id}
+    - stage: {stage} (queue, classification, extraction)
+    - status: {status} (pending, processing, completed, failed, skipped)
+    - error: {error} (optional error message)
+    
+    STEPS:
+    1. Call update_processing_status(document_id, stage, status, error)
+    2. Return update confirmation
+    
+  expected_output: >
+    JSON with update result:
+    {
+      "success": true,
+      "document_id": "DOC_xxx",
+      "stage": "classification",
+      "status": "completed"
+    }
+
+
+handle_error_task:
+  description: >
+    Handle a processing error with retry logic.
+    
+    INPUT:
+    - document_id: {document_id}
+    - stage: {stage}
+    - error_message: {error_message}
+    
+    STEPS:
+    1. Call record_error(document_id, stage, error_message)
+    2. Call check_retry_eligible(document_id, stage)
+    3. If eligible: Call reset_stage_for_retry(document_id, stage)
+    4. If not eligible: Call flag_for_review(document_id, "Max retries exceeded")
+    5. Return retry decision
+    
+  expected_output: >
+    JSON with error handling result:
+    {
+      "success": true,
+      "document_id": "DOC_xxx",
+      "will_retry": true/false,
+      "retry_count": N,
+      "flagged_for_review": true/false
+    }
+
+
+# ==================== SUMMARY AGENT TASKS ====================
+
+generate_summary_task:
+  description: >
+    Generate a comprehensive processing summary after queue completion.
+    
+    STEPS:
+    1. Call generate_processing_summary() to aggregate all results
+    2. Call generate_report_text() for human-readable format
+    3. Optionally call export_results_json() to save full results
+    4. Return summary
+    
+    This task runs after all documents have been processed.
+    
+  expected_output: >
+    JSON with processing summary:
+    {
+      "total_documents": N,
+      "completed": M,
+      "failed": K,
+      "by_type": {"passport": X, "drivers_license": Y, ...},
+      "errors": [...],
+      "requires_review": [...],
+      "report": "... formatted text report ..."
+    }
+
+
+get_results_task:
+  description: >
+    Get detailed results for specific documents.
+    
+    INPUT:
+    - document_ids: {document_ids}
+    
+    STEPS:
+    1. Call get_document_results(document_ids)
+    2. Return detailed results for each document
+    
+  expected_output: >
+    JSON with document results:
+    {
+      "document_count": N,
+      "results": {
+        "DOC_xxx": {
+          "status": "completed",
+          "document_type": "passport",
+          "extracted_fields": ["full_name", "dob", ...]
+        },
+        ...
+      }
+    }

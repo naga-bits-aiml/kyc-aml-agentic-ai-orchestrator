@@ -1,12 +1,19 @@
 """
-Clean CLI chat interface for KYC-AML document processing using pure CrewAI.
+Clean CLI chat interface for KYC-AML document processing using CrewAI Pipeline.
+
+This interface integrates with the new pipeline agents:
+- QueueAgent: Scans paths, expands folders, splits PDFs, builds queue
+- ClassificationAgent: Classifies documents via REST API
+- ExtractionAgent: Extracts data from documents via REST API  
+- MetadataAgent: Tracks status and handles errors
+- SummaryAgent: Generates processing reports
 """
 import sys
 import re
 from pathlib import Path
 from typing import List, Optional
-from crew import KYCAMLCrew
-from flows.document_processing_flow import kickoff_flow
+from pipeline_crew import DocumentProcessingCrew, create_pipeline_crew
+from pipeline_flow import run_pipeline, run_pipeline_sync
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from utilities import config, settings, logger
 from utilities.llm_factory import create_llm, get_model_info
@@ -27,7 +34,7 @@ class ChatInterface:
         self._initialize_system()
         
     def _initialize_system(self):
-        """Initialize CrewAI crew and LLM."""
+        """Initialize CrewAI pipeline crew and LLM."""
         try:
             # Create LLM using factory
             self.llm = create_llm()
@@ -36,12 +43,12 @@ class ChatInterface:
             print(f"✅ Model initialized: {model_name} ({provider})")
             self.logger.info(f"✅ LLM initialized: {model_name} ({provider})")
             
-            # Initialize CrewAI crew with the same LLM
-            self.crew = KYCAMLCrew(llm=self.llm)
-            self.logger.info("✅ CrewAI crew initialized with shared LLM")
+            # Initialize CrewAI pipeline crew with the same LLM
+            self.crew = create_pipeline_crew()
+            self.logger.info("✅ CrewAI pipeline crew initialized")
             
-            # System prompt - KYC/AML Assistant Persona
-            system_prompt = """You are an intelligent KYC/AML Document Processing Assistant powered by CrewAI agents.
+            # System prompt - KYC/AML Assistant Persona with Pipeline Agents
+            system_prompt = """You are an intelligent KYC/AML Document Processing Assistant powered by CrewAI pipeline agents.
 
 Your Role:
 - Assist with document processing, classification, and data extraction
@@ -49,6 +56,14 @@ Your Role:
 - Help manage customer onboarding cases when needed
 - Process standalone documents (policies, guidelines, general documents) without case requirements
 - Resume processing for documents that have pending stages
+
+Your Pipeline Agents:
+You have 5 specialized agents working together:
+1. **QueueAgent**: Scans input paths, expands folders, splits PDFs into pages, builds the processing queue
+2. **ClassificationAgent**: Classifies documents via REST API (passport, license, utility bill, etc.)
+3. **ExtractionAgent**: Extracts structured data from documents via REST API
+4. **MetadataAgent**: Tracks status, handles errors, manages retries
+5. **SummaryAgent**: Generates processing reports and statistics
 
 Your Capabilities:
 You have access to specialized tools to:
@@ -58,16 +73,19 @@ You have access to specialized tools to:
 4. Check case status with detailed metadata (workflow stage, document types, extracted data)
 5. Browse all documents in the system, filtered by stage or case
 6. Retrieve specific documents by their unique ID
-7. **Resume processing for existing documents by their document ID**
+7. **Run the full pipeline** on files or folders
+8. **Resume processing** for existing documents by their document ID
 
 Document Processing Workflows:
 A. CASE-AGNOSTIC: User provides document → Process immediately → Get unique document ID → Optionally link to case later
 B. CASE-BASED: User provides case + document → Process and auto-link to case
-C. **RESUME PROCESSING**: User provides document ID (DOC_...) → Load metadata → Resume from pending stage
+C. **PIPELINE RUN**: User provides folder path → Queue all files → Classify → Extract → Generate summary
+D. **RESUME PROCESSING**: User provides document ID (DOC_...) → Load metadata → Resume from pending stage
 
 IMPORTANT: 
 - When a user provides a document path without mentioning a case, process it immediately WITHOUT asking for a case reference
 - When a user provides a document ID (starts with "DOC_"), use process_document_by_id to resume processing
+- When a user provides a folder, use run_pipeline to process all documents
 - Documents can always be linked to cases later if needed
 - Never block document processing by requiring a case upfront
 
@@ -75,10 +93,10 @@ Communication Style:
 - Professional yet friendly - be helpful and efficient
 - Clear and concise - users value quick results
 - Proactive - suggest linking to cases AFTER processing, not before
-- Transparent - explain what the system is doing
+- Transparent - explain what the pipeline agents are doing
 
 When users provide documents:
-- Process them immediately with submit_documents_for_processing (case_reference is optional)
+- Process them immediately with submit_documents_for_processing or run_document_pipeline
 - Show the generated document IDs in the response
 - Suggest linking to a case only AFTER successful processing
 - If they provide a document ID, use process_document_by_id to resume
@@ -172,10 +190,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             return f"✅ Created new case: {self.case_reference}"
     
     def process_documents(self, file_paths: List[str]) -> str:
-        """Process documents using CrewAI flow."""
-        if not self.case_reference:
-            return "⚠️  Please set a case reference first (e.g., KYC-2024-001)"
-        
+        """Process documents using CrewAI pipeline flow."""
         if not file_paths:
             return "❌ No valid file paths provided"
         
@@ -189,21 +204,31 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
                 return f"❌ File not found: {path}"
         
         try:
-            print(f"\n🚀 Processing {len(valid_paths)} document(s) with CrewAI...")
-            print(f"   Case: {self.case_reference}")
+            print(f"\n🚀 Processing {len(valid_paths)} document(s) with Pipeline Agents...")
+            if self.case_reference:
+                print(f"   Case: {self.case_reference}")
             
-            # Use CrewAI flow
-            result = kickoff_flow(
-                case_reference=self.case_reference,
-                document_paths=valid_paths
-            )
+            # Use the new pipeline flow
+            import asyncio
+            result = asyncio.run(run_pipeline(valid_paths[0] if len(valid_paths) == 1 else valid_paths[0]))
             
             msg = f"\n✅ Processing Complete!\n\n"
-            msg += f"📁 Case: {self.case_reference}\n"
+            if self.case_reference:
+                msg += f"📁 Case: {self.case_reference}\n"
             msg += f"📄 Documents: {len(valid_paths)}\n"
             
             if result:
-                msg += f"\n🔄 Result:\n{result}"
+                if isinstance(result, dict):
+                    if result.get('success'):
+                        stats = result.get('summary', {}).get('statistics', {})
+                        msg += f"\n📊 Results:\n"
+                        msg += f"   • Total: {stats.get('total_documents', 0)}\n"
+                        msg += f"   • Completed: {stats.get('completed', 0)}\n"
+                        msg += f"   • Failed: {stats.get('failed', 0)}\n"
+                    else:
+                        msg += f"\n⚠️  Error: {result.get('error', 'Unknown')}\n"
+                else:
+                    msg += f"\n🔄 Result:\n{result}"
             
             return msg
             
@@ -213,84 +238,57 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
     
     def add_directory_to_queue(self, directory_path: str, priority: int = 1) -> str:
         """Add all documents from a directory to the processing queue."""
-        from flows.document_processing_flow import add_directory_to_queue
+        from tools.queue_tools import build_processing_queue, get_queue_status
         
         try:
-            result = add_directory_to_queue(directory_path, priority=priority)
+            result = build_processing_queue(directory_path)
             
-            if result['status'] == 'success':
-                msg = f"✅ {result['message']}\n\n"
+            if result.get('success'):
+                msg = f"✅ Added {result.get('queued_count', 0)} documents to queue\n\n"
                 msg += f"📊 Queue Status:\n"
-                status = result['queue_status']
-                msg += f"   • Pending: {status['pending']}\n"
-                msg += f"   • Total in queue: {status['total_queue']}\n"
-                msg += f"   • Processed: {status['total_processed']}\n"
+                status = get_queue_status()
+                msg += f"   • Pending: {status.get('pending', 0)}\n"
+                msg += f"   • Total: {status.get('total', 0)}\n"
                 return msg
             else:
-                return f"❌ {result['message']}"
+                return f"❌ {result.get('error', 'Failed to build queue')}"
         except Exception as e:
             self.logger.error(f"Error adding directory to queue: {e}")
             return f"❌ Error: {str(e)}"
     
     def add_files_to_queue(self, file_paths: List[str], priority: int = 1) -> str:
         """Add multiple files to the processing queue."""
-        from flows.document_processing_flow import add_files_to_queue
+        from tools.queue_tools import build_processing_queue
         
         try:
-            result = add_files_to_queue(file_paths, priority=priority)
+            # Process each file path
+            total_queued = 0
+            for file_path in file_paths:
+                result = build_processing_queue(file_path)
+                if result.get('success'):
+                    total_queued += result.get('queued_count', 0)
             
-            if result['status'] == 'success':
-                msg = f"✅ {result['message']}\n\n"
-                msg += f"📊 Queue Status:\n"
-                status = result['queue_status']
-                msg += f"   • Pending: {status['pending']}\n"
-                msg += f"   • Total in queue: {status['total_queue']}\n"
-                msg += f"   • Processed: {status['total_processed']}\n"
-                return msg
-            else:
-                return f"❌ {result['message']}"
+            msg = f"✅ Added {total_queued} documents to queue\n"
+            return msg
         except Exception as e:
             self.logger.error(f"Error adding files to queue: {e}")
             return f"❌ Error: {str(e)}"
     
     def view_queue_status(self) -> str:
         """View current queue status."""
-        from flows.document_processing_flow import get_queue_status
+        from tools.queue_tools import get_queue_status
         
         try:
-            result = get_queue_status()
-            status = result['status']
-            pending = result['pending']
-            failed = result['failed']
+            status = get_queue_status()
             
             msg = "📊 Queue Status\n"
             msg += "="*60 + "\n\n"
             msg += f"📋 Summary:\n"
-            msg += f"   • Pending: {status['pending']}\n"
-            msg += f"   • Processing: {status['processing']}\n"
-            msg += f"   • Failed: {status['failed']}\n"
-            msg += f"   • Total in queue: {status['total_queue']}\n"
-            msg += f"   • Total processed: {status['total_processed']}\n\n"
-            
-            if pending:
-                msg += f"📄 Pending Documents ({len(pending)}):\n"
-                for entry in pending[:10]:  # Show first 10
-                    file_name = Path(entry['source_path']).name
-                    source = entry['source_type']
-                    msg += f"   • {entry['id']}: {file_name} (source: {source})\n"
-                if len(pending) > 10:
-                    msg += f"   ... and {len(pending) - 10} more\n"
-                msg += "\n"
-            
-            if failed:
-                msg += f"❌ Failed Documents ({len(failed)}):\n"
-                for entry in failed[:5]:  # Show first 5
-                    file_name = Path(entry['source_path']).name
-                    error = entry.get('error', 'Unknown error')
-                    msg += f"   • {entry['id']}: {file_name}\n"
-                    msg += f"     Error: {error}\n"
-                if len(failed) > 5:
-                    msg += f"   ... and {len(failed) - 5} more\n"
+            msg += f"   • Pending: {status.get('pending', 0)}\n"
+            msg += f"   • Processing: {status.get('processing', 0)}\n"
+            msg += f"   • Completed: {status.get('completed', 0)}\n"
+            msg += f"   • Failed: {status.get('failed', 0)}\n"
+            msg += f"   • Total: {status.get('total', 0)}\n\n"
             
             return msg
         except Exception as e:
@@ -298,53 +296,61 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             return f"❌ Error: {str(e)}"
     
     def process_queue(self, max_documents: Optional[int] = None) -> str:
-        """Process documents from queue one by one."""
-        from flows.document_processing_flow import process_next_document_from_queue
-        
+        """Process documents from queue using pipeline agents."""
         try:
+            import asyncio
+            from tools.queue_tools import get_next_from_queue, mark_document_processed
+            from tools.classification_api_tools import classify_document
+            from tools.extraction_api_tools import extract_document_data
+            
             processed_count = 0
             failed_count = 0
-            skipped_count = 0
             
-            print("\n🚀 Processing documents from queue...")
+            print("\n🚀 Processing documents from queue with Pipeline Agents...")
             print("="*60 + "\n")
             
             while True:
-                # Check if we've hit max documents limit
                 if max_documents and processed_count >= max_documents:
                     break
                 
-                # Process next document
-                result = process_next_document_from_queue(
-                    processing_mode='process',
-                    case_id=self.case_reference,
-                    llm=self.llm,
-                    auto_drain=False
-                )
+                # Get next document
+                next_doc = get_next_from_queue()
+                if not next_doc.get('success') or not next_doc.get('document'):
+                    break
                 
-                if result['status'] == 'complete':
-                    break  # No more documents
-                elif result['status'] == 'success':
-                    processed_count += 1
-                    doc_id = result.get('document_id', 'UNKNOWN')
-                    print(f"✅ Processed: {doc_id}")
-                elif result['status'] == 'failed':
+                doc = next_doc['document']
+                doc_id = doc.get('document_id')
+                file_path = doc.get('stored_path')
+                
+                print(f"Processing: {doc_id}")
+                
+                try:
+                    # Classification
+                    class_result = classify_document(file_path)
+                    if class_result.get('success'):
+                        doc_type = class_result.get('document_type')
+                        
+                        # Extraction
+                        extract_result = extract_document_data(file_path, doc_type)
+                        
+                        # Mark as processed
+                        mark_document_processed(doc_id, 'completed')
+                        processed_count += 1
+                        print(f"✅ Completed: {doc_id}")
+                    else:
+                        mark_document_processed(doc_id, 'failed', class_result.get('error'))
+                        failed_count += 1
+                        print(f"❌ Failed: {doc_id}")
+                        
+                except Exception as e:
+                    mark_document_processed(doc_id, 'failed', str(e))
                     failed_count += 1
-                    queue_id = result.get('queue_id', 'UNKNOWN')
-                    error = result.get('error', 'Unknown error')
-                    print(f"❌ Failed: {queue_id} - {error}")
-                elif result['status'] == 'skipped':
-                    skipped_count += 1
-                    print(f"⏭️  Skipped document")
             
-            # Summary
             msg = f"\n📊 Queue Processing Complete\n"
             msg += "="*60 + "\n\n"
             msg += f"Results:\n"
             msg += f"   • Processed: {processed_count}\n"
             msg += f"   • Failed: {failed_count}\n"
-            msg += f"   • Skipped: {skipped_count}\n"
-            msg += f"   • Total: {processed_count + failed_count + skipped_count}\n"
             
             return msg
         except Exception as e:
@@ -353,36 +359,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
     
     def process_next_from_queue(self) -> str:
         """Process just the next document from queue."""
-        from flows.document_processing_flow import process_next_document_from_queue
-        
-        try:
-            result = process_next_document_from_queue(
-                processing_mode='process',
-                case_id=self.case_reference,
-                llm=self.llm,
-                auto_drain=False
-            )
-            
-            if result['status'] == 'complete':
-                return "✅ Queue is empty - no more documents to process"
-            elif result['status'] == 'success':
-                doc_id = result.get('document_id', 'UNKNOWN')
-                msg = f"✅ Successfully processed document: {doc_id}\n\n"
-                msg += f"📊 Queue Status:\n"
-                status = result['queue_status']
-                msg += f"   • Pending: {status['pending']}\n"
-                msg += f"   • Failed: {status['failed']}\n"
-                return msg
-            elif result['status'] == 'failed':
-                error = result.get('error', 'Unknown error')
-                return f"❌ Failed to process document: {error}"
-            elif result['status'] == 'skipped':
-                return "⏭️  Document skipped by user"
-            else:
-                return f"⚠️  Unknown result status: {result['status']}"
-        except Exception as e:
-            self.logger.error(f"Error processing next document: {e}")
-            return f"❌ Error: {str(e)}"
+        return self.process_queue(max_documents=1)
     
     def extract_file_paths(self, text: str) -> List[str]:
         """Extract file paths from user input."""
@@ -443,21 +420,29 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         """Show help information."""
         return """
 ╔════════════════════════════════════════════════════╗
-║         KYC-AML Chat Interface - Help              ║
+║     KYC-AML Pipeline Chat Interface - Help         ║
 ╚════════════════════════════════════════════════════╝
+
+🤖 Pipeline Agents:
+   • QueueAgent: Scans paths, expands folders, splits PDFs
+   • ClassificationAgent: Classifies documents via REST API
+   • ExtractionAgent: Extracts data via REST API
+   • MetadataAgent: Tracks status and handles errors
+   • SummaryAgent: Generates processing reports
 
 📋 Quick Start:
    1. Ask: "List all cases" or "Show me the cases"
    2. Say: "Switch to case KYC-2024-001"
    3. Say: "What's the status?"
    4. Provide document path: "Process ~/Documents/passport.pdf"
+   5. Run full pipeline: "Run pipeline on ~/Documents/kyc_docs"
 
 💬 Natural Language:
    Just ask naturally! The AI assistant has tools to:
    • List all cases
    • Show current status  
    • Switch between cases
-   • Process documents
+   • Process documents with pipeline agents
    • Manage document queue
 
 🔧 Commands:
@@ -469,10 +454,10 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
    • Provide full file path: /path/to/document.pdf
    • Use ~ for home directory: ~/Documents/file.pdf
    • Quote paths with spaces: "~/My Documents/file.pdf"
+   • Process folder: "Run pipeline on ~/Documents/kyc"
 
-📋 Queue Management (NEW):
+📋 Queue Management:
    • Add directory to queue: "Queue all files from ~/Documents/kyc"
-   • Add files to queue: "Add passport.pdf and license.jpg to queue"
    • View queue status: "Show queue status"
    • Process queue: "Process all queued documents"
    • Process next: "Process next document from queue"
@@ -481,7 +466,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
    "Show me all cases"
    "Switch to case KYC-2024-001"
    "Process ~/Documents/passport.pdf"
-   "Queue all files from ~/Documents/uploads"
+   "Run pipeline on ~/Documents/uploads"
    "Show queue status"
    "Process next document from queue"
    "What's the current status?"
@@ -509,8 +494,8 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             model_info = ""
         
         print("\n" + "="*60)
-        print("🤖 KYC-AML Chat Interface - Pure CrewAI")
-        print(f"✨ LLM-Powered with Tool Calling{model_info}")
+        print("🤖 KYC-AML Pipeline Chat Interface")
+        print(f"✨ 5 Pipeline Agents with Tool Calling{model_info}")
         print("="*60)
         print("Type 'help' for commands, 'exit' to quit\n")
         

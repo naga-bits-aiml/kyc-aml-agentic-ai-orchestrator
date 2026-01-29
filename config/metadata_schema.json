@@ -1,0 +1,262 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Document Metadata Schema",
+  "description": "Schema for document metadata JSON files in the processing pipeline",
+  "type": "object",
+  "required": ["document_id", "original_filename", "stored_path", "created_at"],
+  "properties": {
+    "document_id": {
+      "type": "string",
+      "description": "Unique document identifier (e.g., DOC_20260129_120000_A1B2C)",
+      "pattern": "^DOC_[0-9]{8}_[0-9]{6}_[A-Z0-9]{5}$"
+    },
+    "original_filename": {
+      "type": "string",
+      "description": "Original filename before processing"
+    },
+    "stored_filename": {
+      "type": "string",
+      "description": "Filename in the intake folder (document_id + extension)"
+    },
+    "stored_path": {
+      "type": "string",
+      "description": "Full path to the stored document file"
+    },
+    "extension": {
+      "type": "string",
+      "description": "File extension (e.g., .pdf, .jpg)",
+      "enum": [".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp"]
+    },
+    "size_bytes": {
+      "type": "integer",
+      "description": "File size in bytes",
+      "minimum": 0
+    },
+    "file_hash": {
+      "type": "string",
+      "description": "SHA256 hash of file for deduplication"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when document was created"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when metadata was last updated"
+    },
+    "parent_document_id": {
+      "type": ["string", "null"],
+      "description": "Parent PDF document ID (for page images)"
+    },
+    "child_document_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Child document IDs (for PDFs split into pages)"
+    },
+    "page_number": {
+      "type": ["integer", "null"],
+      "description": "Page number (for child documents from PDF)",
+      "minimum": 1
+    },
+    "total_pages": {
+      "type": ["integer", "null"],
+      "description": "Total pages in parent PDF",
+      "minimum": 1
+    },
+    "queue": {
+      "type": "object",
+      "description": "Queue stage tracking",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "processing", "completed", "failed", "skipped"],
+          "description": "Current queue status"
+        },
+        "queued_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "When document was added to queue"
+        },
+        "started_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "When processing started"
+        },
+        "completed_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "When queue stage completed"
+        },
+        "error": {
+          "type": ["string", "null"],
+          "description": "Error message if queue stage failed"
+        },
+        "retry_count": {
+          "type": "integer",
+          "description": "Number of retry attempts",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "description": "Classification stage tracking",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "processing", "completed", "failed", "skipped"],
+          "description": "Current classification status"
+        },
+        "started_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "result": {
+          "type": ["object", "null"],
+          "description": "Full API response from classification"
+        },
+        "document_type": {
+          "type": ["string", "null"],
+          "description": "Classified document type (e.g., passport, drivers_license)",
+          "examples": ["passport", "drivers_license", "national_id", "utility_bill", "bank_statement", "pan_card"]
+        },
+        "confidence": {
+          "type": ["number", "null"],
+          "description": "Classification confidence score (0.0 to 1.0)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "error": {
+          "type": ["string", "null"],
+          "description": "Error message if classification failed"
+        },
+        "retry_count": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+    "extraction": {
+      "type": "object",
+      "description": "Extraction stage tracking",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "processing", "completed", "failed", "skipped"]
+        },
+        "started_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "result": {
+          "type": ["object", "null"],
+          "description": "Full API response from extraction"
+        },
+        "extracted_fields": {
+          "type": "object",
+          "description": "Extracted field values keyed by field name",
+          "additionalProperties": true
+        },
+        "error": {
+          "type": ["string", "null"]
+        },
+        "retry_count": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+    "processing_status": {
+      "type": "string",
+      "enum": ["queued", "processing", "completed", "failed", "split"],
+      "description": "Overall processing status",
+      "default": "queued"
+    },
+    "last_error": {
+      "type": ["string", "null"],
+      "description": "Most recent error message"
+    },
+    "requires_review": {
+      "type": "boolean",
+      "description": "Flag for manual review required",
+      "default": false
+    },
+    "review_reason": {
+      "type": ["string", "null"],
+      "description": "Reason for flagging document for review"
+    },
+    "flagged_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "When document was flagged for review"
+    }
+  },
+  "examples": [
+    {
+      "document_id": "DOC_20260129_143022_A3F8B",
+      "original_filename": "passport_john_doe.jpg",
+      "stored_filename": "DOC_20260129_143022_A3F8B.jpg",
+      "stored_path": "/documents/intake/DOC_20260129_143022_A3F8B.jpg",
+      "extension": ".jpg",
+      "size_bytes": 245678,
+      "file_hash": "a1b2c3d4e5f6...",
+      "created_at": "2026-01-29T14:30:22.123456",
+      "updated_at": "2026-01-29T14:32:15.789012",
+      "parent_document_id": null,
+      "child_document_ids": [],
+      "page_number": null,
+      "total_pages": null,
+      "queue": {
+        "status": "completed",
+        "queued_at": "2026-01-29T14:30:22.123456",
+        "started_at": "2026-01-29T14:30:25.000000",
+        "completed_at": "2026-01-29T14:30:25.500000",
+        "error": null,
+        "retry_count": 0
+      },
+      "classification": {
+        "status": "completed",
+        "started_at": "2026-01-29T14:30:26.000000",
+        "completed_at": "2026-01-29T14:30:28.500000",
+        "result": {"type": "passport", "confidence": 0.97},
+        "document_type": "passport",
+        "confidence": 0.97,
+        "error": null,
+        "retry_count": 0
+      },
+      "extraction": {
+        "status": "completed",
+        "started_at": "2026-01-29T14:30:29.000000",
+        "completed_at": "2026-01-29T14:32:15.000000",
+        "result": {"fields": {"full_name": "John Doe", "date_of_birth": "1990-05-15"}},
+        "extracted_fields": {
+          "full_name": "John Doe",
+          "date_of_birth": "1990-05-15",
+          "passport_number": "AB1234567",
+          "nationality": "United States",
+          "expiry_date": "2030-05-14"
+        },
+        "error": null,
+        "retry_count": 0
+      },
+      "processing_status": "completed",
+      "last_error": null,
+      "requires_review": false,
+      "review_reason": null,
+      "flagged_at": null
+    }
+  ]
+}
