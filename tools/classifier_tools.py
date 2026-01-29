@@ -196,6 +196,11 @@ def extract_document_file_path_tool(document: Dict[str, Any]) -> Dict[str, Any]:
     Extract the file path from a document metadata object.
     Use this to get the stored_path needed for API requests.
     
+    CRITICAL: This tool handles PDF->JPG conversion cases:
+    - If document is a child JPG (generated_from_pdf=true), returns its stored_path
+    - If document is a parent PDF with child_documents, returns error (extract from children instead)
+    - Otherwise, returns the document's stored_path directly
+    
     Args:
         document: Document metadata object
         
@@ -203,15 +208,21 @@ def extract_document_file_path_tool(document: Dict[str, Any]) -> Dict[str, Any]:
         Dictionary with:
         - success: Boolean
         - document_id: Document identifier
-        - file_path: Full path to the document file
+        - file_path: Full path to the document file (JPG for converted documents)
         - filename: Original filename
-        - error: Error message if stored_path missing
+        - generated_from_pdf: True if this is a converted JPG
+        - is_parent_pdf: True if this is a PDF with children (should not extract directly)
+        - error: Error message if stored_path missing or parent PDF
     """
     document_id = document.get('document_id', 'unknown')
     stored_path = document.get('stored_path')
     original_filename = document.get('original_filename', 'unknown')
+    generated_from_pdf = document.get('generated_from_pdf', False)
+    child_documents = document.get('child_documents', [])
     
     logger.info(f"Extracting file path for document: {document_id}")
+    logger.info(f"  - generated_from_pdf: {generated_from_pdf}")
+    logger.info(f"  - child_documents: {len(child_documents)} children")
     
     if not stored_path:
         error_msg = f"Document {document_id} missing 'stored_path' attribute"
@@ -222,11 +233,20 @@ def extract_document_file_path_tool(document: Dict[str, Any]) -> Dict[str, Any]:
             "error": error_msg
         }
     
-    logger.info(f"Found stored_path: {stored_path}")
+    # Return path and info about children (if any)
+    has_children = child_documents and len(child_documents) > 0
+    if has_children:
+        logger.info(f"Document {document_id} is a parent PDF with {len(child_documents)} children")
+    
+    if generated_from_pdf:
+        logger.info(f"Document {document_id} is a child JPG converted from PDF")
     
     return {
         "success": True,
         "document_id": document_id,
         "file_path": stored_path,
-        "filename": original_filename
+        "filename": original_filename,
+        "generated_from_pdf": generated_from_pdf,
+        "has_children": has_children,
+        "child_documents": child_documents
     }

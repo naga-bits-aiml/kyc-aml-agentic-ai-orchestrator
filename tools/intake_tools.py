@@ -289,6 +289,230 @@ def _validate_and_store_document(file_path: str, intake_dir: Path) -> Dict[str, 
         }
 
 
+@tool("Resolve Document Paths")
+def resolve_document_paths_tool(paths: List[str], recursive: bool = False) -> Dict[str, Any]:
+    """
+    Resolve input paths into a list of valid document files.
+
+    Accepts a mix of file and directory paths. Directories are scanned for
+    supported file types based on settings.allowed_extensions.
+
+    Args:
+        paths: List of file or directory paths
+        recursive: Whether to scan directories recursively (default: False)
+
+    Returns:
+        Dictionary with resolved files and skipped paths
+    """
+    logger.info(f"Resolving {len(paths)} input path(s)")
+
+    allowed_extensions = [ext.lower() for ext in settings.allowed_extensions]
+    resolved_files: List[str] = []
+    skipped_paths: List[Dict[str, str]] = []
+    directories_scanned: List[str] = []
+    seen_files = set()
+
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        path = Path(raw_path).expanduser().resolve()
+
+        if not path.exists():
+            skipped_paths.append({"path": str(path), "reason": "Path does not exist"})
+            continue
+
+        if path.is_dir():
+            directories_scanned.append(str(path))
+            iterator = path.rglob("*") if recursive else path.iterdir()
+            entries = sorted([p for p in iterator if p.is_file()], key=lambda p: p.name)
+            for entry in entries:
+                if entry.suffix.lower() not in allowed_extensions:
+                    skipped_paths.append({
+                        "path": str(entry),
+                        "reason": "Unsupported extension"
+                    })
+                    continue
+                resolved_path = str(entry.resolve())
+                if resolved_path in seen_files:
+                    continue
+                seen_files.add(resolved_path)
+                resolved_files.append(resolved_path)
+            continue
+
+        if path.is_file():
+            if path.suffix.lower() not in allowed_extensions:
+                skipped_paths.append({
+                    "path": str(path),
+                    "reason": "Unsupported extension"
+                })
+                continue
+            resolved_path = str(path)
+            if resolved_path not in seen_files:
+                seen_files.add(resolved_path)
+                resolved_files.append(resolved_path)
+            continue
+
+        skipped_paths.append({"path": str(path), "reason": "Unsupported path type"})
+
+    return {
+        "success": True,
+        "resolved_files": resolved_files,
+        "directories_scanned": directories_scanned,
+        "skipped_paths": skipped_paths,
+        "allowed_extensions": allowed_extensions,
+        "total_resolved": len(resolved_files)
+    }
+
+
+@tool("Queue Documents for Classification")
+def queue_documents_for_classification_tool(
+    document_paths: List[str],
+    child_documents: Optional[List[Dict[str, str]]] = None,
+    require_confirmation: bool = False,
+    priority: int = 1
+) -> Dict[str, Any]:
+    """
+    Queue validated documents (and optional child documents) for classification.
+
+    Args:
+        document_paths: List of intake stored paths to queue
+        child_documents: Optional list of child doc dicts with keys:
+            - child_id
+            - parent_id
+        require_confirmation: Prompt user for confirmation before queuing
+        priority: Queue priority (lower = higher priority)
+
+    Returns:
+        Dictionary with queue results and summary
+    """
+    from utilities.queue_manager import DocumentQueue
+
+    queue = DocumentQueue()
+    queue_data = queue._load_queue()
+    existing_paths = {
+        str(Path(entry.get("source_path", "")).resolve())
+        for entry in queue_data.get("queue", [])
+        if entry.get("source_path")
+    }
+
+    child_documents = child_documents or []
+    intake_dir = Path(settings.documents_dir) / "intake"
+
+    preview = {
+        "documents": [str(Path(p).resolve()) for p in document_paths],
+        "child_documents": child_documents
+    }
+
+    if require_confirmation:
+        print("\n" + "=" * 70)
+        print("📥 INTAKE QUEUE PREVIEW")
+        print("=" * 70)
+        print(f"Documents: {len(preview['documents'])}")
+        for path in preview["documents"][:5]:
+            print(f"  • {Path(path).name}")
+        if len(preview["documents"]) > 5:
+            print(f"  ... and {len(preview['documents']) - 5} more")
+        print(f"Child documents: {len(child_documents)}")
+        print("=" * 70)
+        try:
+            response = input("Queue these documents for classification? (y/n): ").strip().lower()
+            if response not in ["y", "yes"]:
+                return {
+                    "success": True,
+                    "queued": False,
+                    "message": "Queueing skipped by user",
+                    "preview": preview
+                }
+        except (EOFError, KeyboardInterrupt):
+            return {
+                "success": True,
+                "queued": False,
+                "message": "Queueing skipped by user",
+                "preview": preview
+            }
+
+    queued_paths = []
+    skipped_paths = []
+    queue_ids = []
+
+    for path_str in document_paths:
+        path = Path(path_str).resolve()
+        if str(path) in existing_paths:
+            skipped_paths.append({"path": str(path), "reason": "Already in queue"})
+            continue
+        if not path.exists():
+            skipped_paths.append({"path": str(path), "reason": "File not found"})
+            continue
+        queue_id = queue.add_file(
+            file_path=str(path),
+            source_type="intake",
+            priority=priority
+        )
+        if queue_id:
+            queue_ids.append(queue_id)
+            queued_paths.append(str(path))
+            existing_paths.add(str(path))
+
+    child_queue_ids = []
+    child_skipped = []
+
+    for child in child_documents:
+        child_id = child.get("child_id")
+        parent_id = child.get("parent_id")
+        if not child_id:
+            continue
+
+        child_files = list(intake_dir.glob(f"{child_id}.*"))
+        child_files = [f for f in child_files if not f.name.endswith('.metadata.json')]
+        if not child_files:
+            child_skipped.append({"child_id": child_id, "reason": "Child file not found"})
+            continue
+
+        child_path = child_files[0].resolve()
+        if str(child_path) in existing_paths:
+            child_skipped.append({"child_id": child_id, "reason": "Already in queue"})
+            continue
+
+        child_metadata = {}
+        metadata_path = intake_dir / f"{child_id}.metadata.json"
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r') as f:
+                    child_metadata = json.load(f)
+            except Exception as e:
+                logger.debug(f"Failed to load child metadata: {e}")
+
+        queue_id = queue.add_file(
+            file_path=str(child_path),
+            source_type="child_creation",
+            priority=priority + 1,
+            parent_id=parent_id,
+            metadata={
+                "page_number": child_metadata.get("page_number"),
+                "generated_from_pdf": True,
+                "child_document_id": child_id
+            }
+        )
+        if queue_id:
+            child_queue_ids.append(queue_id)
+            existing_paths.add(str(child_path))
+
+    return {
+        "success": True,
+        "queued": True,
+        "queue_ids": queue_ids,
+        "child_queue_ids": child_queue_ids,
+        "queued_paths": queued_paths,
+        "skipped_paths": skipped_paths,
+        "skipped_children": child_skipped,
+        "summary": {
+            "documents_queued": len(queue_ids),
+            "child_documents_queued": len(child_queue_ids),
+            "documents_skipped": len(skipped_paths),
+            "child_documents_skipped": len(child_skipped)
+        }
+    }
+
 @tool("Validate Document")
 def validate_document_tool(file_path: str) -> Dict[str, Any]:
     """
@@ -382,7 +606,8 @@ def batch_validate_documents_tool(file_paths: List[str]) -> Dict[str, Any]:
                 "validation_status": "valid",
                 "validation_timestamp": result["metadata"]["uploaded_at"],
                 "stage": "intake",
-                "reused_existing": result.get("reused_existing", False)
+                "reused_existing": result.get("reused_existing", False),
+                "metadata": result.get("metadata", {})
             })
         else:
             failed_documents.append({

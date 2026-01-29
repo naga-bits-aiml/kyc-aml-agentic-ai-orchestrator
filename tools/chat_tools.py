@@ -348,7 +348,26 @@ def create_chat_tools(chat_interface):
                 'status': 'active',
                 'workflow_stage': 'document_intake',
                 'description': description or '',
-                'documents': []
+                'documents': [],
+                'case_summary': {
+                    'id_proof': {
+                        'documents': [],
+                        'verified': False,
+                        'extracted_data': {}
+                    },
+                    'address_proof': {
+                        'documents': [],
+                        'verified': False,
+                        'extracted_data': {}
+                    },
+                    'financial_statement': {
+                        'documents': [],
+                        'verified': False,
+                        'extracted_data': {}
+                    },
+                    'verification_status': 'pending',
+                    'generated_at': None
+                }
             }
             metadata_manager.save_metadata(metadata)
             
@@ -718,13 +737,29 @@ def create_chat_tools(chat_interface):
                     msg += f"\n👶 Child Documents Detected:\n"
                     msg += f"   Found {len(child_docs)} child document(s) that need processing.\n"
                     for child in child_docs[:5]:  # Show first 5
-                        msg += f"   • {child['document_id']} (from {child['parent_id']})\n"
+                        parent_id = child.get('parent_id', 'unknown')
+                        msg += f"   • {child.get('document_id', 'unknown')} (from {parent_id})\n"
                     if len(child_docs) > 5:
                         msg += f"   ... and {len(child_docs) - 5} more\n"
-                    
-                    msg += f"\n💡 To process child documents, use:\n"
-                    for child in child_docs[:3]:  # Show command for first 3
-                        msg += f"   'process {child['document_id']}'\n"
+
+                    msg += f"\n⏭️  Auto-processing child documents in a second run...\n"
+                    child_result = kickoff_flow(
+                        file_paths=[],
+                        case_id=case_ref,
+                        llm=chat_interface.llm,
+                        processing_mode="process"
+                    )
+                    if isinstance(child_result, dict):
+                        child_status = child_result.get('status', 'unknown')
+                        msg += f"   Child run status: {child_status}\n"
+                        child_docs_processed = child_result.get('documents', {})
+                        msg += (
+                            f"   Child docs processed: total={child_docs_processed.get('total', 0)}, "
+                            f"successful={child_docs_processed.get('successful', 0)}, "
+                            f"failed={child_docs_processed.get('failed', 0)}\n"
+                        )
+                    else:
+                        msg += f"   Child run result: {child_result}\n"
                 
                 # Suggest next steps
                 if not case_ref and result.get('validated_documents'):
@@ -917,13 +952,7 @@ def create_chat_tools(chat_interface):
             # Update last_updated timestamp
             metadata["last_updated"] = datetime.now().isoformat()
             
-            # Update stage indicator if needed
-            if metadata.get('stage') == stage_name:
-                # If current stage is the one being reset, move back to previous stage
-                if stage_name == 'extraction':
-                    metadata['stage'] = 'classification'
-                elif stage_name == 'classification':
-                    metadata['stage'] = 'intake'
+            # Stage field is vestigial - status blocks handle progression
             
             # Save updated metadata
             with open(metadata_path, 'w') as f:
@@ -947,6 +976,336 @@ def create_chat_tools(chat_interface):
             logger.error(f"Error resetting document stage: {e}", exc_info=True)
             return f"❌ Error resetting stage: {str(e)}"
     
+    @tool
+    def link_document_to_case(document_id: str, case_id: str) -> str:
+        """
+        Manually link an existing document to a case.
+        
+        Note: Normally, documents are automatically linked when processed with a case_id.
+        Use this tool only for:
+        - Linking documents that were processed without a case
+        - Moving documents between cases
+        - Manual corrections
+        
+        Args:
+            document_id: Document ID (e.g., DOC_20260127_143022_A3F8B)
+            case_id: Case ID (e.g., KYC-2026-001)
+            
+        Returns:
+            Status message indicating success or failure
+        """
+        try:
+            # Find document metadata file in intake or other stages
+            stages = ["intake", "classification", "extraction", "processed"]
+            metadata_path = None
+            current_stage = None
+            
+            for stage in stages:
+                potential_path = Path(settings.documents_dir) / stage / f"{document_id}.metadata.json"
+                if potential_path.exists():
+                    metadata_path = potential_path
+                    current_stage = stage
+                    break
+            
+            if not metadata_path:
+                return f"❌ Document {document_id} not found in any stage"
+            
+            # Load existing metadata
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            
+            # Add case to linked_cases if not already present
+            if "linked_cases" not in metadata:
+                metadata["linked_cases"] = []
+            
+            if case_id not in metadata["linked_cases"]:
+                metadata["linked_cases"].append(case_id)
+                metadata["last_updated"] = datetime.now().isoformat()
+                
+                # Save updated document metadata
+                with open(metadata_path, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                
+                # Now update the case metadata to include this document
+                case_dir = Path(settings.documents_dir) / "cases" / case_id
+                case_metadata_path = case_dir / "case_metadata.json"
+                
+                if case_metadata_path.exists():
+                    with open(case_metadata_path, 'r') as f:
+                        case_metadata = json.load(f)
+                    
+                    # Add document_id to case's documents list if not already present
+                    if "documents" not in case_metadata:
+                        case_metadata["documents"] = []
+                    
+                    if document_id not in case_metadata["documents"]:
+                        case_metadata["documents"].append(document_id)
+                        
+                        # Save updated case metadata
+                        with open(case_metadata_path, 'w') as f:
+                            json.dump(case_metadata, f, indent=2)
+                        
+                        logger.info(f"Manually linked document {document_id} to case {case_id}")
+                else:
+                    logger.warning(f"Case metadata file not found: {case_metadata_path}")
+                
+                return f"✅ Document {document_id} successfully linked to case {case_id}\n   Stage: {current_stage}"
+            else:
+                return f"ℹ️  Document {document_id} already linked to case {case_id}"
+                
+        except Exception as e:
+            logger.error(f"Failed to link document to case: {e}", exc_info=True)
+            return f"❌ Error linking document: {str(e)}"
+    
+    @tool
+    def view_queue_status() -> str:
+        """View the current document processing queue status.
+        
+        Shows pending, processing, completed, and failed documents in the queue.
+        Use this to check how many documents are waiting to be processed.
+        
+        Returns:
+            Queue status with document counts and list of pending documents.
+        """
+        from utilities.queue_manager import DocumentQueue
+        
+        try:
+            queue = DocumentQueue()
+            result = {
+                "status": queue.get_status(),
+                "pending": queue.get_all_pending(),
+                "failed": queue.get_all_failed()
+            }
+            status = result['status']
+            pending = result['pending']
+            failed = result['failed']
+            
+            msg = "\n📊 Queue Status\n"
+            msg += "=" * 60 + "\n\n"
+            msg += f"📋 Summary:\n"
+            msg += f"   • Pending: {status['pending']}\n"
+            msg += f"   • Processing: {status['processing']}\n"
+            msg += f"   • Failed: {status['failed']}\n"
+            msg += f"   • Total in queue: {status['total_queue']}\n"
+            msg += f"   • Total processed: {status['total_processed']}\n\n"
+            
+            if pending:
+                msg += f"📄 Pending Documents ({len(pending)}):\n"
+                for entry in pending[:10]:  # Show first 10
+                    file_name = Path(entry['source_path']).name
+                    source = entry['source_type']
+                    priority = entry.get('priority', 1)
+                    msg += f"   • {file_name} (source: {source}, priority: {priority})\n"
+                if len(pending) > 10:
+                    msg += f"   ... and {len(pending) - 10} more\n"
+                msg += "\n"
+            
+            if failed:
+                msg += f"❌ Failed Documents ({len(failed)}):\n"
+                for entry in failed[:5]:  # Show first 5
+                    file_name = Path(entry['source_path']).name
+                    error = entry.get('error', 'Unknown error')
+                    msg += f"   • {file_name}: {error}\n"
+                if len(failed) > 5:
+                    msg += f"   ... and {len(failed) - 5} more\n"
+            
+            return msg
+        except Exception as e:
+            logger.error(f"Error viewing queue: {e}")
+            return f"❌ Error: {str(e)}"
+    
+    @tool
+    def process_next_from_queue() -> str:
+        """Process the next document from the queue.
+        
+        Takes the next pending document from the queue and processes it through
+        the complete workflow (classification and extraction).
+        
+        Returns:
+            Processing result for the document.
+        """
+        from flows.document_processing_flow import process_next_document_from_queue
+        
+        try:
+            result = process_next_document_from_queue(
+                processing_mode='process',
+                case_id=chat_interface.case_reference,
+                llm=chat_interface.llm,
+                auto_drain=False
+            )
+            
+            if result['status'] == 'complete':
+                return "✅ Queue is empty - no more documents to process."
+            elif result['status'] == 'success':
+                doc_id = result.get('document_id', 'UNKNOWN')
+                stage_results = result.get('stage_results', {})
+                msg = f"✅ Successfully processed: {doc_id}\n\n"
+                msg += f"📊 Results:\n"
+                for stage, stage_result in stage_results.items():
+                    status = stage_result.get('status', 'unknown')
+                    msg += f"   • {stage}: {status}\n"
+                return msg
+            elif result['status'] == 'failed':
+                queue_id = result.get('queue_id', 'UNKNOWN')
+                error = result.get('error', 'Unknown error')
+                return f"❌ Failed to process: {queue_id}\n   Error: {error}"
+            else:
+                return f"⚠️  Unexpected result: {result.get('message', 'Unknown')}"
+        except Exception as e:
+            logger.error(f"Error processing from queue: {e}")
+            return f"❌ Error: {str(e)}"
+    
+    @tool
+    def process_all_queued_documents(max_documents: Optional[int] = None) -> str:
+        """Process all documents in the queue.
+        
+        Processes all pending documents in the queue one by one until the queue
+        is empty or the maximum number is reached.
+        
+        Args:
+            max_documents: Maximum number of documents to process (optional)
+            
+        Returns:
+            Summary of processing results for all documents.
+        """
+        from flows.document_processing_flow import process_next_document_from_queue
+        
+        try:
+            processed_count = 0
+            failed_count = 0
+            skipped_count = 0
+            
+            msg = "\n🚀 Processing documents from queue...\n"
+            msg += "=" * 60 + "\n\n"
+            
+            while True:
+                # Check if we've hit max documents limit
+                if max_documents and processed_count >= max_documents:
+                    msg += f"\n⏸️  Reached maximum of {max_documents} documents.\n"
+                    break
+                
+                # Process next document
+                result = process_next_document_from_queue(
+                    processing_mode='process',
+                    case_id=chat_interface.case_reference,
+                    llm=chat_interface.llm,
+                    auto_drain=False
+                )
+                
+                if result['status'] == 'complete':
+                    msg += "\n✅ Queue is now empty.\n"
+                    break
+                elif result['status'] == 'success':
+                    processed_count += 1
+                    doc_id = result.get('document_id', 'UNKNOWN')
+                    msg += f"✅ Processed #{processed_count}: {doc_id}\n"
+                elif result['status'] == 'failed':
+                    failed_count += 1
+                    queue_id = result.get('queue_id', 'UNKNOWN')
+                    error = result.get('error', 'Unknown error')
+                    msg += f"❌ Failed #{failed_count}: {queue_id} - {error}\n"
+                elif result['status'] == 'skipped':
+                    skipped_count += 1
+                    msg += f"⏭️  Skipped document #{skipped_count}\n"
+            
+            # Summary
+            msg += f"\n📊 Processing Complete\n"
+            msg += "=" * 60 + "\n\n"
+            msg += f"Results:\n"
+            msg += f"   • Processed: {processed_count}\n"
+            msg += f"   • Failed: {failed_count}\n"
+            msg += f"   • Skipped: {skipped_count}\n"
+            msg += f"   • Total: {processed_count + failed_count + skipped_count}\n"
+            
+            return msg
+        except Exception as e:
+            logger.error(f"Error processing queue: {e}")
+            return f"❌ Error: {str(e)}"
+    
+    @tool
+    def add_directory_to_queue(directory_path: str, priority: int = 1) -> str:
+        """Add all documents from a directory to the processing queue.
+        
+        Scans a directory and adds all supported documents (PDF, JPG, PNG, etc.)
+        to the queue for processing. Documents are not processed immediately,
+        but queued for later processing.
+        
+        Args:
+            directory_path: Path to directory containing documents
+            priority: Priority level (1=high, 2=medium, 3=low), default=1
+            
+        Returns:
+            Confirmation with count of added documents.
+        """
+        from utilities.queue_manager import DocumentQueue
+        
+        try:
+            queue = DocumentQueue()
+            queue_ids = queue.add_directory(directory_path, priority=priority)
+            if not queue_ids:
+                result = {
+                    "status": "failed",
+                    "message": "No valid documents found in directory",
+                    "queue_ids": []
+                }
+            else:
+                result = {
+                    "status": "success",
+                    "message": f"Added {len(queue_ids)} documents to queue from {directory_path}",
+                    "queue_ids": queue_ids,
+                    "queue_status": queue.get_status()
+                }
+            
+            if result['status'] == 'success':
+                msg = f"✅ {result['message']}\n\n"
+                msg += f"📊 Queue Status:\n"
+                status = result['queue_status']
+                msg += f"   • Pending: {status['pending']}\n"
+                msg += f"   • Total in queue: {status['total_queue']}\n"
+                msg += f"   • Processed: {status['total_processed']}\n"
+                return msg
+            else:
+                return f"❌ {result['message']}"
+        except Exception as e:
+            logger.error(f"Error adding directory to queue: {e}")
+            return f"❌ Error: {str(e)}"
+    
+    @tool
+    def add_files_to_queue(file_paths: str, priority: int = 1) -> str:
+        """Add specific files to the processing queue.
+        
+        Add one or more document files to the queue for processing.
+        Provide file paths as comma-separated values.
+        
+        Args:
+            file_paths: File paths separated by commas (e.g., "/path/file1.pdf,/path/file2.jpg")
+            priority: Priority level (1=high, 2=medium, 3=low), default=1
+            
+        Returns:
+            Confirmation with count of added documents.
+        """
+        from flows.document_processing_flow import add_files_to_queue as add_files
+        
+        try:
+            # Parse comma-separated paths
+            paths = [p.strip() for p in file_paths.split(',')]
+            
+            result = add_files(paths, priority=priority)
+            
+            if result['status'] == 'success':
+                msg = f"✅ {result['message']}\n\n"
+                msg += f"📊 Queue Status:\n"
+                status = result['queue_status']
+                msg += f"   • Pending: {status['pending']}\n"
+                msg += f"   • Total in queue: {status['total_queue']}\n"
+                msg += f"   • Processed: {status['total_processed']}\n"
+                return msg
+            else:
+                return f"❌ {result['message']}"
+        except Exception as e:
+            logger.error(f"Error adding files to queue: {e}")
+            return f"❌ Error: {str(e)}"
+    
     return [
         list_all_cases, 
         get_current_status, 
@@ -961,5 +1320,11 @@ def create_chat_tools(chat_interface):
         update_document_metadata,
         submit_documents_for_processing,
         process_document_by_id,
-        reset_document_stage
+        reset_document_stage,
+        link_document_to_case,  # Manual document linking (fallback)
+        view_queue_status,  # Queue management
+        process_next_from_queue,
+        process_all_queued_documents,
+        add_directory_to_queue,
+        add_files_to_queue
     ]

@@ -12,7 +12,10 @@
   },
   "processing": {
     "batch_size": 10,
-    "enable_batch_processing": true
+    "enable_batch_processing": true,
+    "require_queue_confirmation": false,
+    "max_auto_drain_docs": 5,
+    "auto_drain_queue": true
   },
   "chat": {
     "history_enabled": true,

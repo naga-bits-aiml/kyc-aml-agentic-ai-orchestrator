@@ -9,6 +9,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from datetime import datetime
 import json
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     from crewai.flow.flow import Flow, listen, start
@@ -27,7 +29,9 @@ except ImportError:
         return decorator
 
 from crew import KYCAMLCrew, process_documents
-from utilities import logger, settings
+from tools.intake_tools import get_document_by_id_tool
+from tools.stage_management_tools import update_document_metadata_tool
+from utilities import logger, settings, config
 
 
 class DocumentProcessingState(BaseModel):
@@ -43,6 +47,14 @@ class DocumentProcessingState(BaseModel):
     # Processing state
     current_stage: str = Field(default="initialized", description="Current workflow stage")
     use_reasoning: bool = Field(default=True, description="Whether to use autonomous reasoning")
+    require_queue_confirmation: bool = Field(
+        default=False,
+        description="Prompt before queueing intake results for classification"
+    )
+    auto_drain_queue: bool = Field(
+        default=True,
+        description="Whether to auto-drain queued documents before finalizing"
+    )
     
     # Stage results (legacy - kept for backward compatibility)
     validated_documents: List[Dict[str, Any]] = Field(default_factory=list)
@@ -70,8 +82,8 @@ class DocumentProcessingState(BaseModel):
     failed_documents: int = 0
     requires_review: int = 0
     
-    # Child documents that need processing (e.g., images from PDF conversion)
-    child_documents_pending: List[Dict[str, str]] = Field(default_factory=list, description="Child documents awaiting processing")
+    # Documents processed in this run (including auto-drained queue)
+    processed_document_ids: List[str] = Field(default_factory=list, description="Processed document IDs")
 
 
 class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE else object):
@@ -99,6 +111,367 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
             super().__init__(*args, **kwargs)
         self.llm = llm
         self.crew = KYCAMLCrew(llm=llm)
+
+    def _parse_crew_output(self, output: Any) -> Dict[str, Any]:
+        """Parse CrewOutput into a dictionary, tolerating non-JSON output."""
+        if hasattr(output, 'raw') and output.raw:
+            raw_str = str(output.raw).strip()
+            if raw_str:
+                try:
+                    return json.loads(raw_str)
+                except json.JSONDecodeError:
+                    import re
+                    json_match = re.search(r'\{.*\}', raw_str, re.DOTALL)
+                    if json_match:
+                        try:
+                            return json.loads(json_match.group())
+                        except json.JSONDecodeError:
+                            return {"error": "Could not parse output", "raw": raw_str[:500]}
+                    return {"error": "No JSON found in output", "raw": raw_str[:500]}
+        if hasattr(output, 'json'):
+            return output.json
+        if isinstance(output, dict):
+            return output
+        return {"error": "Invalid output format", "output": str(output)[:500]}
+
+    # Legacy queue methods removed - now using unified DocumentQueue in utilities/queue_manager.py
+
+    def _run_tool(self, tool_obj, **kwargs) -> Dict[str, Any]:
+        """Run a CrewAI tool regardless of decorator wrapping."""
+        if hasattr(tool_obj, "run"):
+            return tool_obj.run(**kwargs)
+        if callable(tool_obj):
+            return tool_obj(**kwargs)
+        return {"error": "Tool is not callable", "tool": str(tool_obj)}
+
+    def _ensure_intake_queue(self, validated_documents: List[Dict[str, Any]], prompt: bool) -> Dict[str, Any]:
+        """
+        Ensure intake results (including PDF child docs) are queued for classification.
+        """
+        from tools.pdf_conversion_tools import convert_pdf_to_images_tool
+        from tools.intake_tools import queue_documents_for_classification_tool
+
+        child_documents = []
+        pdf_conversions = []
+
+        for doc in validated_documents:
+            metadata = doc.get("metadata") or {}
+            document_id = doc.get("document_id")
+            extension = (metadata.get("extension") or "").lower()
+            if extension != ".pdf" or not document_id:
+                continue
+
+            metadata = self._refresh_document_metadata(document_id) or metadata
+            existing_children = metadata.get("child_documents", [])
+            if existing_children:
+                for child_id in existing_children:
+                    child_documents.append({"child_id": child_id, "parent_id": document_id})
+                continue
+
+            conversion_result = self._run_tool(
+                convert_pdf_to_images_tool,
+                document_id=document_id
+            )
+            if conversion_result.get("success"):
+                pdf_conversions.append({
+                    "document_id": conversion_result.get("source_document_id"),
+                    "child_documents": conversion_result.get("child_documents", []),
+                    "total_pages": conversion_result.get("total_pages")
+                })
+                for child_id in conversion_result.get("child_documents", []):
+                    child_documents.append({"child_id": child_id, "parent_id": document_id})
+
+        queue_result = self._run_tool(
+            queue_documents_for_classification_tool,
+            document_paths=[doc.get("stored_path") for doc in validated_documents if doc.get("stored_path")],
+            child_documents=child_documents,
+            require_confirmation=prompt
+        )
+
+        return {
+            "queue_result": queue_result,
+            "pdf_conversions": pdf_conversions
+        }
+
+    def _run_intake_fallback(self, previous_status: str) -> Optional[Dict[str, Any]]:
+        """
+        Run intake steps without LLM when the agent returns an empty response.
+        """
+        try:
+            from tools.skip_check_tool import check_if_stage_should_skip_tool
+            from tools.intake_tools import (
+                resolve_document_paths_tool,
+                batch_validate_documents_tool,
+                queue_documents_for_classification_tool,
+                link_document_to_case_tool
+            )
+            from tools.pdf_conversion_tools import convert_pdf_to_images_tool
+        except Exception as e:
+            logger.error(f"Failed to load intake tools for fallback: {e}")
+            return None
+
+        skip_check = self._run_tool(
+            check_if_stage_should_skip_tool,
+            processing_mode=self.state.processing_mode,
+            stage_status=previous_status,
+            stage_name="intake"
+        )
+
+        if skip_check.get("should_skip"):
+            return {
+                "skipped": True,
+                "message": skip_check.get("reason", "Intake skipped"),
+                "skip_check_result": skip_check
+            }
+
+        resolved_paths = self._run_tool(
+            resolve_document_paths_tool,
+            paths=self.state.file_paths,
+            recursive=False
+        )
+
+        resolved_files = resolved_paths.get("resolved_files", [])
+        validation_result = self._run_tool(
+            batch_validate_documents_tool,
+            file_paths=resolved_files
+        )
+
+        validated_documents = validation_result.get("validated_documents", [])
+        failed_documents = validation_result.get("failed_documents", [])
+
+        queue_info = self._ensure_intake_queue(
+            validated_documents,
+            prompt=self.state.require_queue_confirmation
+        )
+        queue_result = queue_info.get("queue_result", {})
+        pdf_conversions = queue_info.get("pdf_conversions", [])
+
+        if self.state.case_id:
+            for doc in validated_documents:
+                doc_id = doc.get("document_id")
+                if not doc_id:
+                    continue
+                self._run_tool(
+                    link_document_to_case_tool,
+                    document_id=doc_id,
+                    case_id=self.state.case_id
+                )
+
+        return {
+            "skip_check_result": skip_check,
+            "resolved_paths": resolved_paths,
+            "validated_documents": validated_documents,
+            "failed_documents": failed_documents,
+            "pdf_conversions": pdf_conversions,
+            "queue_summary": queue_result.get("summary", {}),
+            "summary": {
+                "total": validation_result.get("total", len(resolved_files)),
+                "valid": validation_result.get("valid", len(validated_documents)),
+                "invalid": validation_result.get("invalid", len(failed_documents))
+            }
+        }
+
+    def _auto_drain_queue(self, max_docs: int) -> List[str]:
+        """
+        Drain pending queue entries up to max_docs and return processed document IDs.
+        """
+        from utilities.queue_manager import DocumentQueue
+        from flows.document_processing_flow import process_next_document_from_queue
+
+        processed_ids: List[str] = []
+        queue = DocumentQueue()
+
+        while len(processed_ids) < max_docs:
+            status = queue.get_status()
+            if status.get("pending", 0) == 0:
+                break
+
+            result = process_next_document_from_queue(
+                processing_mode=self.state.processing_mode,
+                case_id=self.state.case_id,
+                llm=self.llm,
+                auto_drain=False
+            )
+
+            if result.get("status") == "success":
+                doc_id = result.get("document_id")
+                if doc_id:
+                    processed_ids.append(doc_id)
+            elif result.get("status") in {"failed", "skipped"}:
+                continue
+            else:
+                break
+
+        return processed_ids
+
+    def _run_flow_kickoff(self) -> None:
+        """
+        Run flow.kickoff safely, even if an event loop is already running.
+        """
+        try:
+            asyncio.get_running_loop()
+            loop_running = True
+        except RuntimeError:
+            loop_running = False
+
+        if loop_running:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(self.kickoff).result()
+        else:
+            self.kickoff()
+
+    def _refresh_document_metadata(self, document_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Refresh document metadata from disk.
+        Use this after crew execution to get latest updates.
+        
+        Args:
+            document_id: Document ID to refresh
+            
+        Returns:
+            Fresh metadata dict or None if failed
+        """
+        result = self._run_tool(get_document_by_id_tool, document_id=document_id)
+        if result.get('success'):
+            return result['metadata']
+        logger.error(f"Failed to refresh metadata for {document_id}")
+        return None
+
+    def _update_validated_document_metadata(self, index: int, document_id: str) -> bool:
+        """
+        Update metadata for a validated document in state.
+        
+        Args:
+            index: Index in validated_documents list
+            document_id: Document ID to refresh
+            
+        Returns:
+            True if successful
+        """
+        fresh_metadata = self._refresh_document_metadata(document_id)
+        if fresh_metadata:
+            self.state.validated_documents[index]['metadata'] = fresh_metadata
+            return True
+        return False
+
+    def _hydrate_validated_documents_with_metadata(self) -> None:
+        """Ensure each validated document includes its current metadata."""
+        for doc in self.state.validated_documents:
+            if doc.get("metadata"):
+                continue
+            document_id = doc.get("document_id")
+            if not document_id:
+                continue
+            result = self._run_tool(get_document_by_id_tool, document_id=document_id)
+            if result.get("metadata"):
+                doc["metadata"] = result["metadata"]
+
+    def _load_validated_documents_from_intake(self) -> None:
+        """Load validated_documents from intake metadata based on file_paths."""
+        if self.state.validated_documents:
+            return
+        intake_dir = Path(settings.documents_dir) / "intake"
+
+        for file_path in self.state.file_paths:
+            path = Path(file_path).resolve()
+            metadata = None
+            document_id = None
+
+            if path.parent.resolve() == intake_dir.resolve() and path.stem.startswith("DOC_"):
+                document_id = path.stem
+                metadata_path = intake_dir / f"{document_id}.metadata.json"
+                if metadata_path.exists():
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+            else:
+                for metadata_file in intake_dir.glob("*.metadata.json"):
+                    try:
+                        with open(metadata_file, 'r') as f:
+                            candidate = json.load(f)
+                        stored_path = Path(candidate.get("stored_path", "")).resolve()
+                        if stored_path == path:
+                            metadata = candidate
+                            document_id = candidate.get("document_id")
+                            break
+                    except Exception as e:
+                        logger.debug(f"Error reading metadata file {metadata_file}: {e}")
+
+            if metadata and document_id:
+                self.state.validated_documents.append({
+                    "document_id": document_id,
+                    "original_filename": metadata.get("original_filename"),
+                    "stored_path": metadata.get("stored_path"),
+                    "file_size": metadata.get("size_bytes"),
+                    "mime_type": f"application/{metadata.get('extension', '').lstrip('.')}",
+                    "validation_status": metadata.get("intake", {}).get("validation_status", "valid"),
+                    "stage": "intake",
+                    "metadata": metadata
+                })
+
+    def _convert_pdfs_and_queue_children(self) -> None:
+        """
+        Convert any PDF documents to images during intake and queue the children.
+        This runs after intake validation to prepare PDFs for classification.
+        """
+        from tools.pdf_conversion_tools import convert_pdf_to_images_tool
+        from utilities.queue_manager import DocumentQueue
+        
+        intake_dir = Path(settings.documents_dir) / "intake"
+        
+        # Find all PDF metadata files in intake
+        for metadata_file in intake_dir.glob("*.metadata.json"):
+            try:
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                
+                # Skip if not a PDF or already has children
+                if metadata.get('extension', '').lower() != '.pdf':
+                    continue
+                    
+                if metadata.get('child_documents'):
+                    continue  # Already converted
+                
+                document_id = metadata.get('document_id')
+                if not document_id:
+                    continue
+                
+                logger.info(f"Converting PDF {document_id} to images during intake")
+                
+                # Convert PDF to images
+                result = convert_pdf_to_images_tool(document_id)
+                
+                if result.get('success'):
+                    child_ids = result.get('child_documents', [])
+                    if child_ids:
+                        # Queue children immediately
+                        queue = DocumentQueue()
+                        queue_ids = queue.add_child_documents(child_ids, parent_id=document_id, priority=2)
+                        logger.info(f"Queued {len(queue_ids)} child documents for PDF {document_id}")
+                else:
+                    logger.warning(f"Failed to convert PDF {document_id}: {result.get('error')}")
+                    
+            except Exception as e:
+                logger.error(f"Error processing PDF {metadata_file}: {e}")
+    
+    def _enqueue_child_documents(self, child_ids: List[str], parent_id: Optional[str] = None) -> None:
+        """
+        Queue child documents for processing using unified DocumentQueue.
+        
+        Args:
+            child_ids: List of child document IDs to queue
+            parent_id: Parent document ID
+        """
+        if not child_ids:
+            return
+        
+        # Use unified queue manager
+        from utilities.queue_manager import DocumentQueue
+        queue = DocumentQueue()
+        
+        # Queue child documents with priority 2 (after initial files)
+        queue_ids = queue.add_child_documents(child_ids, parent_id=parent_id or "UNKNOWN", priority=2)
+        
+        logger.info(f"Queued {len(queue_ids)} child documents for parent {parent_id}")
     
     @start()
     def intake_documents(self):
@@ -124,7 +497,8 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
             intake_inputs = {
                 'file_paths': self.state.file_paths,
                 'processing_mode': self.state.processing_mode,
-                'stage_status': previous_status  # Pass actual previous status
+                'stage_status': previous_status,  # Pass actual previous status
+                'require_queue_confirmation': self.state.require_queue_confirmation
             }
             if self.state.case_id:
                 intake_inputs['case_id'] = self.state.case_id
@@ -133,14 +507,15 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
             intake_output = intake_crew.kickoff(inputs=intake_inputs)
             logger.info(f"Intake crew completed. Output type: {type(intake_output)}")
             
-            # Extract result from CrewOutput and parse JSON
-            import json
-            if hasattr(intake_output, 'raw'):
-                logger.info(f"Intake raw output: {intake_output.raw[:500]}...")  # Log first 500 chars
-                intake_result = json.loads(intake_output.raw)
+            # Extract result from CrewOutput with tolerant parsing
+            if hasattr(intake_output, 'raw') and intake_output.raw:
+                logger.info(f"Intake raw output: {str(intake_output.raw)[:500]}...")  # Log first 500 chars
             else:
-                logger.info(f"Intake output (no raw attribute): {str(intake_output)[:500]}...")
-                intake_result = intake_output
+                logger.info(f"Intake output (no raw attribute or empty raw): {str(intake_output)[:500]}...")
+            intake_result = self._parse_crew_output(intake_output)
+
+            if intake_result.get("error"):
+                raise ValueError(f"Invalid response from intake LLM output: {intake_result.get('error')}")
             
             # Check if stage was skipped
             if intake_result.get('skipped'):
@@ -154,6 +529,15 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
             # Update state with results
             self.state.validated_documents = intake_result.get('validated_documents', [])
             self.state.total_documents = len(self.state.validated_documents)
+            self._hydrate_validated_documents_with_metadata()
+
+            # Ensure PDFs create child documents and all docs are queued
+            prompt_for_queue = self.state.require_queue_confirmation and not intake_result.get("queue_summary")
+            queue_info = self._ensure_intake_queue(self.state.validated_documents, prompt=prompt_for_queue)
+            if queue_info.get("pdf_conversions") and not intake_result.get("pdf_conversions"):
+                intake_result["pdf_conversions"] = queue_info["pdf_conversions"]
+            if queue_info.get("queue_result") and not intake_result.get("queue_summary"):
+                intake_result["queue_summary"] = queue_info["queue_result"].get("summary", {})
             
             # Capture success metadata
             self.state.stage_metadata['intake'] = {
@@ -164,13 +548,42 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
                 'data': intake_result
             }
             logger.info(f"Intake complete: {self.state.total_documents} documents validated")
+            
+            # Convert PDFs to images and queue children
+            self._convert_pdfs_and_queue_children()
                 
         except Exception as e:
             import traceback
             error_msg = f"Intake exception: {str(e)}"
             logger.error(error_msg)
             logger.exception("Full intake error traceback:")
-            
+
+            fallback_error_signals = [
+                "Invalid response from LLM call - None or empty",
+                "Invalid response from intake LLM output"
+            ]
+            if any(signal in str(e) for signal in fallback_error_signals):
+                logger.warning("Attempting intake fallback without LLM response")
+                fallback_result = self._run_intake_fallback(previous_status)
+                if fallback_result:
+                    if fallback_result.get("skipped"):
+                        logger.info(f"Intake fallback skipped: {fallback_result.get('message')}")
+                        return self.state
+
+                    self.state.validated_documents = fallback_result.get('validated_documents', [])
+                    self.state.total_documents = len(self.state.validated_documents)
+                    self._hydrate_validated_documents_with_metadata()
+
+                    self.state.stage_metadata['intake'] = {
+                        'status': 'success',
+                        'msg': f"Successfully validated {self.state.total_documents} documents (fallback)",
+                        'error': None,
+                        'trace': None,
+                        'data': fallback_result
+                    }
+                    logger.info(f"Intake fallback complete: {self.state.total_documents} documents validated")
+                    return self.state
+
             # Capture failure metadata
             self.state.stage_metadata['intake'] = {
                 'status': 'fail',
@@ -200,49 +613,85 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
         previous_status = self.state.stage_metadata['classification'].get('status', 'pending')
         
         try:
-            # Use documents from intake if available, otherwise use file paths
-            documents_to_classify = self.state.validated_documents
-            
-            if not documents_to_classify:
-                logger.warning("No validated documents from intake. Classification may fail.")
-            
-            # Execute classification using crew - agent decides whether to skip or execute
-            classification_crew = self.crew.classification_crew()
-            classification_output = classification_crew.kickoff(inputs={
-                'case_id': self.state.case_id,
-                'documents': documents_to_classify,
-                'processing_mode': self.state.processing_mode,
-                'stage_status': previous_status  # Pass actual previous status
-            })
-            
-            # Extract result from CrewOutput and parse JSON
-            import json
-            classification_result = json.loads(classification_output.raw) if hasattr(classification_output, 'raw') else classification_output
-            
-            # Check if stage was skipped
-            if classification_result.get('skipped'):
-                logger.info(f"Classification stage skipped: {classification_result.get('message')}")
+            self._load_validated_documents_from_intake()
+            self._hydrate_validated_documents_with_metadata()
+
+            if not self.state.validated_documents:
+                logger.warning("No validated documents available for classification")
                 return self.state
-            
-            # Stage was executed, set to running then success
+
+            classification_crew = self.crew.classification_crew()
+            classified_documents = []
+            failed_documents = []
+            skipped_documents = 0
+
+            for doc in self.state.validated_documents:
+                document_id = doc.get('document_id')
+                if not document_id:
+                    continue
+
+                document_metadata = doc.get('metadata', {})
+                stage_status = document_metadata.get('classification', {}).get('status', 'pending')
+
+                classification_output = classification_crew.kickoff(inputs={
+                    'document_id': document_id,
+                    'document_metadata': document_metadata,
+                    'case_id': self.state.case_id,
+                    'processing_mode': self.state.processing_mode,
+                    'stage_status': stage_status or previous_status
+                })
+
+                classification_result = self._parse_crew_output(classification_output)
+
+                if classification_result.get('skipped'):
+                    skipped_documents += 1
+                    continue
+
+                classified_documents.extend(
+                    classification_result.get('classified_documents')
+                    or classification_result.get('classifications', [])
+                )
+                failed_documents.extend(classification_result.get('failed_documents', []))
+
+                # Refresh metadata to get latest classification results
+                refreshed = self._run_tool(get_document_by_id_tool, document_id=document_id)
+                if refreshed.get("metadata"):
+                    doc["metadata"] = refreshed["metadata"]
+                    # Children already queued in intake stage - no need to queue here
+
             self.state.stage_metadata['classification']['status'] = 'running'
-            
-            # Update state with results
-            self.state.classifications = classification_result.get('classifications', [])
+
+            self.state.classifications = classified_documents
             self.state.requires_review = sum(
-                1 for c in self.state.classifications 
+                1 for c in self.state.classifications
                 if c.get('requires_review', False)
             )
-            
-            # Capture success metadata
+
+            success_count = len(classified_documents)
+            failure_count = len(failed_documents)
+            if success_count and failure_count:
+                status = "partial"
+            elif success_count:
+                status = "success"
+            elif failure_count:
+                status = "fail"
+            elif skipped_documents:
+                status = "skipped"
+            else:
+                status = "pending"
+
             self.state.stage_metadata['classification'] = {
-                'status': 'success',
-                'msg': f"Successfully classified {len(self.state.classifications)} documents",
+                'status': status,
+                'msg': f"Classification: {success_count} success, {failure_count} failed, {skipped_documents} skipped",
                 'error': None,
                 'trace': None,
-                'data': classification_result
+                'data': {
+                    "classified_documents": classified_documents,
+                    "failed_documents": failed_documents,
+                    "skipped_documents": skipped_documents
+                }
             }
-            logger.info(f"Classification complete: {len(self.state.classifications)} documents classified")
+            logger.info(f"Classification complete: {success_count} success, {failure_count} failed, {skipped_documents} skipped")
                 
         except Exception as e:
             import traceback
@@ -279,80 +728,96 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
         previous_status = self.state.stage_metadata['extraction'].get('status', 'pending')
         
         try:
-            # Use classifications if available, otherwise try with file paths
-            classifications_to_extract = self.state.classifications
-            
-            if not classifications_to_extract:
-                logger.warning("No classifications available. Extraction may fail.")
-            
-            # Execute extraction using crew - agent decides whether to skip or execute
-            extraction_crew = self.crew.extraction_crew()
-            extraction_output = extraction_crew.kickoff(inputs={
-                'case_id': self.state.case_id,
-                'classifications': classifications_to_extract,
-                'processing_mode': self.state.processing_mode,
-                'stage_status': previous_status  # Pass actual previous status
-            })
-            
-            # Extract result from CrewOutput (Vision API returns structured JSON)
-            import json
-            extraction_result = {}
-            
-            # Parse CrewOutput - try raw JSON first, then other attributes
-            if hasattr(extraction_output, 'raw') and extraction_output.raw:
-                raw_str = str(extraction_output.raw).strip()
-                if raw_str:  # Only try to parse non-empty strings
-                    try:
-                        extraction_result = json.loads(raw_str)
-                        logger.info(f"Parsed extraction result from raw: {len(extraction_result.get('extractions', []))} extractions")
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Failed to parse raw as JSON (len={len(raw_str)}): {e}")
-                        # Try to extract JSON from text if embedded
-                        import re
-                        json_match = re.search(r'\{.*\}', raw_str, re.DOTALL)
-                        if json_match:
-                            try:
-                                extraction_result = json.loads(json_match.group())
-                                logger.info("Extracted JSON from text successfully")
-                            except:
-                                extraction_result = {"error": "Could not parse output", "raw": raw_str[:500]}
-                        else:
-                            extraction_result = {"error": "No JSON found in output", "raw": raw_str[:500]}
-            elif hasattr(extraction_output, 'json'):
-                extraction_result = extraction_output.json
-            elif isinstance(extraction_output, dict):
-                extraction_result = extraction_output
-            else:
-                logger.error(f"Unexpected output type: {type(extraction_output)}")
-                extraction_result = {"error": "Invalid output format", "output": str(extraction_output)[:500]}
-            
-            # Check if stage was skipped
-            if extraction_result.get('skipped'):
-                logger.info(f"Extraction stage skipped: {extraction_result.get('message')}")
+            self._load_validated_documents_from_intake()
+            self._hydrate_validated_documents_with_metadata()
+
+            if not self.state.validated_documents:
+                logger.warning("No validated documents available for extraction")
                 return self.state
-            
-            # Stage was executed, set to running then success
+
+            extraction_crew = self.crew.extraction_crew()
+            extracted_documents = []
+            failed_documents = []
+            skipped_documents = 0
+
+            for doc in self.state.validated_documents:
+                document_id = doc.get('document_id')
+                if not document_id:
+                    continue
+
+                document_metadata = doc.get('metadata', {})
+                stage_status = document_metadata.get('extraction', {}).get('status', 'pending')
+
+                child_documents = document_metadata.get('child_documents', [])
+                if child_documents and not document_metadata.get("generated_from_pdf", False):
+                    skipped_documents += 1
+                    self._run_tool(
+                        update_document_metadata_tool,
+                        document_id=document_id,
+                        stage_name="extraction",
+                        status="skipped",
+                        msg="Extraction skipped for parent PDF; process child documents instead"
+                    )
+                    # Children already queued in classification stage - don't duplicate
+                    continue
+
+                extraction_output = extraction_crew.kickoff(inputs={
+                    'document_id': document_id,
+                    'document_metadata': document_metadata,
+                    'case_id': self.state.case_id,
+                    'processing_mode': self.state.processing_mode,
+                    'stage_status': stage_status or previous_status
+                })
+
+                extraction_result = self._parse_crew_output(extraction_output)
+
+                if extraction_result.get('skipped'):
+                    skipped_documents += 1
+                    continue
+
+                extracted_documents.extend(
+                    extraction_result.get('extracted_documents')
+                    or extraction_result.get('extractions', [])
+                )
+                failed_documents.extend(extraction_result.get('failed_documents', []))
+
+                refreshed = self._run_tool(get_document_by_id_tool, document_id=document_id)
+                if refreshed.get("metadata"):
+                    doc["metadata"] = refreshed["metadata"]
+
             self.state.stage_metadata['extraction']['status'] = 'running'
-            
-            # Update state with results (Vision API provides structured extractions)
-            self.state.extractions = extraction_result.get('extractions', [])
-            
-            # Count successful vs failed extractions (based on fields found)
+
+            self.state.extractions = extracted_documents
+
             self.state.successful_documents = sum(
-                1 for e in self.state.extractions 
-                if e.get('success', False) and e.get('extraction_quality', 0) > 0.5
+                1 for e in self.state.extractions
+                if e.get('success', True) and e.get('extraction_quality', 0) > 0.5
             )
-            self.state.failed_documents = len(self.state.extractions) - self.state.successful_documents
-            
-            # Capture success metadata
+            self.state.failed_documents = len(failed_documents)
+
+            if self.state.successful_documents and self.state.failed_documents:
+                status = "partial"
+            elif self.state.successful_documents:
+                status = "success"
+            elif self.state.failed_documents:
+                status = "fail"
+            elif skipped_documents:
+                status = "skipped"
+            else:
+                status = "pending"
+
             self.state.stage_metadata['extraction'] = {
-                'status': 'success',
-                'msg': f"Successfully extracted data from {self.state.successful_documents}/{len(self.state.extractions)} documents",
+                'status': status,
+                'msg': f"Extraction: {self.state.successful_documents} success, {self.state.failed_documents} failed, {skipped_documents} skipped",
                 'error': None,
                 'trace': None,
-                'data': extraction_result
+                'data': {
+                    "extracted_documents": extracted_documents,
+                    "failed_documents": failed_documents,
+                    "skipped_documents": skipped_documents
+                }
             }
-            logger.info(f"Extraction complete: {self.state.successful_documents} successful, {self.state.failed_documents} failed")
+            logger.info(f"Extraction complete: {self.state.successful_documents} successful, {self.state.failed_documents} failed, {skipped_documents} skipped")
                 
         except Exception as e:
             import traceback
@@ -388,12 +853,14 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
         self.state.end_time = datetime.now()
         self.state.current_stage = "finalized"
         
-        # Check for child documents that need processing
-        child_documents = self._find_child_documents()
-        if child_documents:
-            logger.info(f"Found {len(child_documents)} child documents that need processing")
-            self.state.child_documents_pending = child_documents
-        
+        processed_ids = [doc.get("document_id") for doc in self.state.validated_documents if doc.get("document_id")]
+
+        # Auto-drain queue for additional documents (e.g., child docs)
+        if self.state.auto_drain_queue:
+            max_docs = config.get("processing.max_auto_drain_docs", 5)
+            drained_ids = self._auto_drain_queue(max_docs=max_docs)
+            processed_ids.extend(drained_ids)
+
         # Analyze stage results to determine case readiness
         stages_summary = {
             'intake': self.state.stage_metadata['intake']['status'],
@@ -419,59 +886,11 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
                 final_status = "requires_review"
         
         self.state.current_stage = final_status
+        self.state.processed_document_ids = list(dict.fromkeys(processed_ids))
         
         logger.info(f"Workflow finalized with status: {final_status}")
         logger.info(f"Stage summary: {stages_summary}")
     
-    def _find_child_documents(self) -> List[Dict[str, str]]:
-        """
-        Find any child documents (e.g., images from PDF conversion) that need processing.
-        
-        Returns:
-            List of child document info dictionaries with document_id and parent_id
-        """
-        child_docs = []
-        
-        try:
-            intake_dir = Path(settings.documents_dir) / "intake"
-            
-            # Check all processed documents for child_documents field
-            for doc_info in self.state.validated_documents:
-                doc_id = doc_info.get('document_id')
-                if not doc_id:
-                    continue
-                
-                metadata_path = intake_dir / f"{doc_id}.metadata.json"
-                if not metadata_path.exists():
-                    continue
-                
-                with open(metadata_path, 'r') as f:
-                    metadata = json.load(f)
-                
-                # Check if this document has child documents
-                child_doc_ids = metadata.get('child_documents', [])
-                for child_id in child_doc_ids:
-                    # Verify child document exists and hasn't been processed yet
-                    child_metadata_path = intake_dir / f"{child_id}.metadata.json"
-                    if child_metadata_path.exists():
-                        with open(child_metadata_path, 'r') as cf:
-                            child_meta = json.load(cf)
-                        
-                        # Check if child needs processing (classification is pending)
-                        classification_status = child_meta.get('classification', {}).get('status', 'pending')
-                        if classification_status == 'pending':
-                            child_docs.append({
-                                'document_id': child_id,
-                                'parent_id': doc_id,
-                                'filename': child_meta.get('original_filename', 'unknown')
-                            })
-                            logger.info(f"Child document {child_id} needs processing (parent: {doc_id})")
-        
-        except Exception as e:
-            logger.error(f"Error finding child documents: {e}")
-            logger.exception("Full traceback:")
-        
-        return child_docs
     def get_results(self) -> Dict[str, Any]:
         """
         Get comprehensive results from the flow execution.
@@ -480,6 +899,21 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
             Dictionary containing all processing results and stage metadata.
             Users can analyze stage_metadata to determine case completion.
         """
+        # Get queue status
+        queue_info = {}
+        try:
+            from utilities.queue_manager import DocumentQueue
+            queue = DocumentQueue()
+            queue_status = queue.get_status()
+            queue_info = {
+                'pending': queue_status['pending'],
+                'processing': queue_status['processing'],
+                'failed': queue_status['failed'],
+                'has_pending': queue_status['pending'] > 0
+            }
+        except Exception as e:
+            logger.warning(f"Could not retrieve queue status: {e}")
+        
         return {
             'case_id': self.state.case_id,
             'status': self.state.current_stage,
@@ -499,6 +933,9 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
                 'requires_review': self.state.requires_review
             },
             
+            # Queue information
+            'queue': queue_info,
+            
             # Raw stage data (for backward compatibility)
             'validated_documents': self.state.validated_documents,
             'classifications': self.state.classifications,
@@ -513,8 +950,8 @@ class DocumentProcessingFlow(Flow[DocumentProcessingState] if FLOW_AVAILABLE els
                 'end': self.state.end_time.isoformat() if self.state.end_time else None
             },
             
-            # Child documents that need processing
-            'child_documents_pending': self.state.child_documents_pending,
+            # Documents processed in this run (including auto-drained queue)
+            'processed_document_ids': self.state.processed_document_ids,
             
             # Case completion hints
             'case_readiness': self._assess_case_readiness()
@@ -582,13 +1019,14 @@ def kickoff_flow(
     case_id: Optional[str] = None,
     llm = None,
     visualize: bool = False,
-    processing_mode: str = 'process'
+    processing_mode: str = 'process',
+    require_queue_confirmation: bool = False
 ) -> Dict[str, Any]:
     """
     Convenience function to kickoff a document processing flow.
     
     Args:
-        file_paths: List of document file paths to process
+        file_paths: List of document file paths to process (can be empty to process queued child docs)
         case_id: Optional case identifier for linking documents to a case
         llm: Language model instance
         visualize: Whether to generate flow visualization (default: False)
@@ -598,6 +1036,8 @@ def kickoff_flow(
     Returns:
         Complete processing results including document IDs
     """
+    from utilities import settings
+
     if not FLOW_AVAILABLE:
         # Fallback to direct crew execution
         return process_documents(case_id or "UNLINKED", file_paths, llm)
@@ -607,10 +1047,22 @@ def kickoff_flow(
     flow.state.case_id = case_id
     flow.state.file_paths = file_paths
     flow.state.processing_mode = processing_mode
+    flow.state.require_queue_confirmation = require_queue_confirmation
+    flow.state.auto_drain_queue = config.get("processing.auto_drain_queue", True)
+
+    # NOTE: Child documents are now processed via the unified queue system
+    # Use process_next_document_from_queue() instead of this function for queue-based processing
+    # This function processes only the provided file_paths
+
+    if not flow.state.file_paths:
+        return {
+            "status": "failed",
+            "errors": ["No documents provided. Use process_next_document_from_queue() for queue-based processing."],
+            "documents": {"total": 0, "successful": 0, "failed": 0, "requires_review": 0}
+        }
     
     # Smart loading: Check if files are already processed documents and load their metadata
     if processing_mode == 'process':
-        from utilities import settings
         intake_dir = Path(settings.documents_dir) / "intake"
         
         for file_path in file_paths:
@@ -629,6 +1081,17 @@ def kickoff_flow(
                         for stage_name in ['intake', 'classification', 'extraction']:
                             if stage_name in metadata:
                                 flow.state.stage_metadata[stage_name] = metadata[stage_name]
+
+                        flow.state.validated_documents.append({
+                            "document_id": doc_id,
+                            "original_filename": metadata.get("original_filename"),
+                            "stored_path": metadata.get("stored_path"),
+                            "file_size": metadata.get("size_bytes"),
+                            "mime_type": f"application/{metadata.get('extension', '').lstrip('.')}",
+                            "validation_status": metadata.get("intake", {}).get("validation_status", "valid"),
+                            "stage": "intake",
+                            "metadata": metadata
+                        })
                         
                         logger.info(
                             f"Loaded existing metadata for {doc_id}:\n" +
@@ -636,6 +1099,7 @@ def kickoff_flow(
                             f"  • Classification: {flow.state.stage_metadata['classification'].get('status')}\n" +
                             f"  • Extraction: {flow.state.stage_metadata['extraction'].get('status')}"
                         )
+        flow.state.total_documents = len(flow.state.validated_documents)
     
     logger.info(
         f"Starting document processing flow\n" +
@@ -655,7 +1119,95 @@ def kickoff_flow(
     
     # Execute the flow
     logger.info(f"Kicking off flow with {len(file_paths)} documents" + (f" for case {case_id}" if case_id else ""))
-    flow.kickoff()
+    flow._run_flow_kickoff()
     
     # Return results
     return flow.get_results()
+
+
+def process_next_document_from_queue(
+    processing_mode: str = 'process',
+    use_reasoning: bool = True,
+    case_id: Optional[str] = None,
+    llm = None,
+    auto_drain: bool = False
+) -> Dict[str, Any]:
+    """
+    Process next document from queue.
+    
+    This is the core queue-based processing function that:
+    1. Gets next document from queue
+    2. Processes the document through the full pipeline
+    3. Updates queue status
+    
+    Args:
+        processing_mode: 'process' or 'reprocess'
+        use_reasoning: Enable agent reasoning
+        case_id: Optional case to link document
+        llm: Language model instance (required)
+        
+    Returns:
+        Dict with processing result and queue status
+    """
+    from utilities.queue_manager import DocumentQueue
+    from utilities.llm_factory import create_llm
+    
+    if llm is None:
+        llm = create_llm()
+    
+    queue = DocumentQueue()
+    
+    # Get next document from queue
+    next_entry = queue.get_next()
+    
+    if not next_entry:
+        return {
+            "status": "complete",
+            "message": "No more documents in queue",
+            "queue_status": queue.get_status()
+        }
+    
+    queue_id = next_entry['id']
+    file_path = next_entry['source_path']
+    
+    # Mark as processing
+    queue.mark_processing(queue_id)
+    logger.info(f"Processing queue entry: {queue_id}")
+    
+    try:
+        # Process single document through flow
+        flow = DocumentProcessingFlow(llm=llm)
+        flow.state.case_id = case_id
+        flow.state.file_paths = [file_path]  # Single file
+        flow.state.processing_mode = processing_mode
+        flow.state.auto_drain_queue = auto_drain
+        
+        # Run flow
+        flow._run_flow_kickoff()
+        
+        # Get document ID from result
+        document_id = None
+        if flow.state.validated_documents:
+            document_id = flow.state.validated_documents[0].get('document_id')
+        
+        # Mark completed
+        queue.mark_completed(queue_id, document_id or "UNKNOWN")
+        
+        return {
+            "status": "success",
+            "queue_id": queue_id,
+            "document_id": document_id,
+            "result": flow.get_results(),
+            "queue_status": queue.get_status()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to process document from queue: {e}")
+        queue.mark_failed(queue_id, str(e))
+        
+        return {
+            "status": "failed",
+            "queue_id": queue_id,
+            "error": str(e),
+            "queue_status": queue.get_status()
+        }

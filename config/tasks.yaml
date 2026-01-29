@@ -14,18 +14,36 @@ validate_documents_task:
     
     STEP 2: If tool returns should_skip=True, return {"skipped": true, "message": "<reason>"} and STOP.
     
-    STEP 3: If tool returns should_skip=False, proceed with validation:
+    STEP 3: If tool returns should_skip=False, resolve file/directory inputs:
     
-    Use batch_validate_documents_tool with file paths: {file_paths}
+    Call resolve_document_paths_tool with inputs:
+      - paths: {file_paths}
+      - recursive: false
     
-    Steps:
-    1. Check if stage should be skipped based on processing_mode and stage_status
-    2. If skip: Return JSON: {{"message": "Stage skipped - already successful", "skipped": true}}
-    3. If execute: Call batch_validate_documents_tool - it handles validation, ID generation, and storage
-    4. Return the result immediately - DO NOT convert PDFs to images yet
-    5. PDF conversion will happen in classification stage if needed
+    STEP 4: Validate and store all resolved files:
+    - Use batch_validate_documents_tool with resolved_files from STEP 3
+    - This tool handles validation, ID generation, and metadata creation
     
-    IMPORTANT: Just validate and store files. Return metadata only.
+    STEP 5: If any validated documents are PDFs, convert them to child image docs:
+    - For each validated document where metadata.extension == ".pdf":
+      * Call convert_pdf_to_images_tool(document_id)
+      * Capture child document IDs and parent document IDs
+    
+    STEP 6: Queue documents for classification:
+    - Call queue_documents_for_classification_tool with:
+      * document_paths: list of stored_path for validated documents
+      * child_documents: list of {child_id, parent_id}
+      * require_confirmation: {require_queue_confirmation}
+    
+    STEP 7 (OPTIONAL - SMART LINKING): 
+    - Check if you have a case_id in your context/inputs
+    - ONLY IF case_id exists and is not empty:
+      * For each validated document_id, call link_document_to_case_tool(document_id, case_id)
+      * This ensures documents are immediately associated with the case
+    - If case_id is NOT provided or empty, skip this step - documents remain independent
+    
+    IMPORTANT: Documents are processed independently. case_id is OPTIONAL. 
+    Linking happens only when case context is explicitly provided.
   
   expected_output: >
     JSON with MANDATORY FIRST FIELD:
@@ -35,9 +53,12 @@ validate_documents_task:
       - Return ONLY: {"skipped": true, "message": "<reason from skip_check_result>"}
     
     IF skip_check_result.should_skip is false:
+      - resolved_paths: {total_resolved, directories_scanned, skipped_paths}
       - validated_documents: [{document_id, original_filename, stored_path, file_size, 
         mime_type, validation_status}]
       - failed_documents: [{file_path, issues}]
+      - pdf_conversions: [{document_id, child_documents, total_pages}]
+      - queue_summary: {documents_queued, child_documents_queued, documents_skipped, child_documents_skipped}
       - summary: {total, valid, invalid}
   
   agent: document_intake_agent
@@ -46,6 +67,10 @@ validate_documents_task:
 
 classify_documents_task:
   description: >
+    INPUT CONTEXT:
+    - document_metadata: {document_metadata} (FULL metadata object with all status blocks)
+    - document_id: {document_id} (also available as metadata['document_id'])
+
     STEP 1 (MANDATORY): Call check_if_stage_should_skip_tool(
       processing_mode="{processing_mode}",
       stage_status="{stage_status}",
@@ -59,25 +84,14 @@ classify_documents_task:
     Categories: identity_proof, address_proof, financial_statement, other
     
     Process:
-    1. FOR EACH DOCUMENT - Check if PDF conversion is needed:
-       a. Call check_pdf_conversion_needed_tool(document_id) to check if it's a PDF
-       b. ONLY IF needs_conversion=true: 
-          - Call convert_pdf_to_images_tool(document_id)
-          - The conversion returns child_document_ids (list of image IDs created from PDF)
-          - For EACH child_document_id: Call get_document_by_id_tool(child_document_id) to get its metadata
-          - Use the child document's stored_path for classification
-       c. IMPORTANT: Do NOT convert image files (jpg, png, etc.) - they are already images!
+    1. Document metadata is PROVIDED in inputs - use it directly (no need to fetch)
+    2. Extract document_id from metadata['document_id'] or use provided document_id
+    3. Log/announce: "Processing document: " followed by the document_id value
+    4. Use metadata['stored_path'] for file location OR call extract_document_file_path_tool(document_metadata)
+    5. Use file path from metadata to classify
+    6. Call make_classifier_api_request(file_path=...) to classify the document
     
-    2. FOR EACH DOCUMENT TO CLASSIFY (original images OR child images from PDF):
-       a. Get the file path:
-          - For original images: Use extract_document_file_path_tool(document)
-          - For child images: Use stored_path from get_document_by_id_tool(child_document_id)
-       b. Call make_classifier_api_request(endpoint_path="/predict", method="POST", file_path=...) to classify
-       c. Parse the API response to get predicted_class and confidence
-    
-    3. Update metadata for EACH classified document:
-       - If classifying a child image: Update the CHILD document metadata with classification results
-       - Also update the PARENT PDF metadata to reference the child classification
+    8. Update metadata after processing:
        
        update_document_metadata_tool(
          document_id="DOC_..." (child ID for child docs, original ID for images),
@@ -93,7 +107,9 @@ classify_documents_task:
          }
        )
     
-    Documents: {documents}
+    IMPORTANT: Document metadata is provided in inputs - use it directly. 
+    The metadata includes all status blocks (intake, classification, extraction).
+    Only call get_document_by_id_tool if you need to refresh metadata for specific reasons.
   
   expected_output: >
     JSON with MANDATORY FIRST FIELD:
@@ -114,6 +130,12 @@ classify_documents_task:
 
 extract_document_data_task:
   description: >
+    INPUT CONTEXT:
+    - document_metadata: {document_metadata} (FULL metadata WITH classification results)
+    - document_id: {document_id} (also available as metadata['document_id'])
+    
+    IMPORTANT: Metadata includes classification block with document_type - use it!
+
     STEP 1 (MANDATORY): Call check_if_stage_should_skip_tool(
       processing_mode="{processing_mode}",
       stage_status="{stage_status}",
@@ -123,11 +145,17 @@ extract_document_data_task:
     STEP 2: If tool returns should_skip=True, return {"skipped": true, "message": "<reason>"} and STOP.
     
     STEP 3: If tool returns should_skip=False, proceed with extraction:
-    1. Get documents in 'classification' stage using get_documents_by_stage("classification")
-    2. FOR EACH document:
-       a. Call extract_text_from_image_tool(file_path=stored_path) to get Vision API response
-       b. Vision API returns structured JSON: {success, text, confidence, word_count, char_count}
-       c. Parse the extracted text based on document_type from classification to identify fields:
+    1. Document metadata is PROVIDED in inputs with classification results
+    2. Extract document_type from metadata['classification']['document_type'] - this tells you what to extract!
+    3. Extract document_id from metadata['document_id']
+    4. Log/announce: "Processing document: " followed by the document_id value
+    5. Use metadata['stored_path'] for file location OR call extract_document_file_path_tool(document_metadata)
+    6. If has_children=true (parent PDF): Mark extraction as "skipped" - children will be extracted
+    7. Otherwise: Call extract_text_from_image_tool(file_path=...) for the document
+    8. Vision API returns structured JSON: {success, text, confidence, word_count, char_count}
+    9. Parse extracted text using document_type from metadata['classification']['document_type']:
+          
+    9. Parse extracted text using document_type from metadata['classification']['document_type']:
           
           For Passport/Voter ID/Driving License (identity documents):
           - Full name, Date of birth, Document number
@@ -140,9 +168,9 @@ extract_document_data_task:
           For PAN/Aadhar:
           - Name, ID number, Date of birth
        
-       d. Update metadata using update_document_metadata_tool:
-          update_document_metadata_tool(
-            document_id="DOC_...",
+    10. Update metadata using update_document_metadata_tool:
+       update_document_metadata_tool(
+         document_id="DOC_...",
             stage_name="extraction",
             status="success" or "fail",
             msg="Successfully extracted structured fields from document" or error description,
@@ -164,9 +192,10 @@ extract_document_data_task:
           )
     
     IMPORTANT:
-    - Vision API provides raw text and confidence
-    - Your job is to parse the text and extract structured fields based on document_type
-    - Use document_type from classification to know what fields to look for
+    - Document metadata PROVIDED with classification results - use metadata['classification']['document_type']
+    - Vision API provides raw text - parse it based on document_type from classification
+    - No need to call get_document_by_id_tool - you have complete context in inputs
+    - metadata['stored_path'] has file location
     - Mark extraction quality based on how many expected fields were found
   
   expected_output: >
@@ -196,6 +225,28 @@ extract_document_data_task:
     }
   
   agent: document_extraction_agent
+
+summarize_documents_task:
+  description: >
+    Summarize documents using provided metadata only.
+
+    INPUTS:
+    - document_ids: {document_ids}
+    - documents_metadata: {documents_metadata}
+
+    REQUIREMENTS:
+    - Use only the provided metadata. Do NOT call processing tools.
+    - Produce a concise bullet list summary.
+    - Include document_id, document_type (if available), key identifiers (if present),
+      status of intake/classification/extraction, and any requires_review flags.
+    - If data is missing, note "unknown" rather than guessing.
+
+  expected_output: >
+    Bullet list text only. Example:
+    - DOC_...: Passport, status intake=success, classification=success, extraction=success
+    - DOC_...: Utility bill, requires_review=true, extraction=pending
+
+  agent: document_summary_agent
 
 batch_extract_documents_task:
   description: >
@@ -269,7 +320,7 @@ validate_and_report_task:
     Validate all processing results for case {case_id} and generate comprehensive report.
     
     Validation checks:
-    1. Verify all documents were processed
+    1. Verify all documents were processed or wait for processing to complete
     2. Check data completeness for each document
     3. Validate field consistency across documents
     4. Identify any data quality issues

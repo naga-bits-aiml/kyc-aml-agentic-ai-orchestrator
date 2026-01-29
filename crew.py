@@ -16,7 +16,9 @@ from tools.intake_tools import (
     link_document_to_case_tool,
     get_document_by_id_tool,
     list_documents_by_case_tool,
-    list_all_documents_tool
+    list_all_documents_tool,
+    resolve_document_paths_tool,
+    queue_documents_for_classification_tool
 )
 from tools.pdf_conversion_tools import (
     convert_pdf_to_images_tool,
@@ -39,7 +41,6 @@ from tools.stage_management_tools import (
     update_document_metadata_in_stage,
     update_document_metadata_tool
 )
-from tools.skip_check_tool import check_if_stage_should_skip_tool
 from tools.skip_check_tool import check_if_stage_should_skip_tool
 
 
@@ -74,6 +75,7 @@ class KYCAMLCrew:
         """
         Document intake and validation agent.
         Uses validation tools to check and organize documents.
+        Can intelligently link documents to cases when case context is provided.
         """
         return Agent(
             config=self.agents_config['document_intake_agent'],
@@ -81,6 +83,11 @@ class KYCAMLCrew:
                 check_if_stage_should_skip_tool,
                 validate_document_tool,
                 batch_validate_documents_tool,
+                resolve_document_paths_tool,
+                link_document_to_case_tool,  # Smart linking capability
+                get_document_by_id_tool,
+                list_documents_by_case_tool,
+                queue_documents_for_classification_tool,
                 convert_pdf_to_images_tool,
                 check_pdf_conversion_needed_tool,
                 move_document_to_stage,
@@ -106,8 +113,6 @@ class KYCAMLCrew:
                 make_classifier_api_request,
                 extract_document_file_path_tool,
                 get_document_by_id_tool,
-                convert_pdf_to_images_tool,
-                check_pdf_conversion_needed_tool,
                 update_document_metadata_tool
             ],
             verbose=True,
@@ -128,6 +133,8 @@ class KYCAMLCrew:
                 extract_text_from_pdf_tool,
                 extract_text_from_image_tool,
                 batch_extract_documents_tool,
+                extract_document_file_path_tool,  # Added for proper file path resolution
+                get_document_by_id_tool,  # Added for fetching document metadata
                 move_document_to_stage,
                 get_documents_by_stage,
                 update_document_metadata_tool
@@ -148,6 +155,19 @@ class KYCAMLCrew:
             verbose=True,
             llm=self.llm,
             allow_delegation=True
+        )
+
+    @agent
+    def document_summary_agent(self) -> Agent:
+        """
+        Document summary agent.
+        Produces metadata-based bullet summaries.
+        """
+        return Agent(
+            config=self.agents_config['document_summary_agent'],
+            verbose=True,
+            llm=self.llm,
+            allow_delegation=False
         )
     
     # ==================== TASK DEFINITIONS ====================
@@ -182,6 +202,14 @@ class KYCAMLCrew:
         return Task(
             config=self.tasks_config['orchestrate_workflow_task'],
             agent=self.supervisor_agent()
+        )
+
+    @task
+    def summarize_documents_task(self) -> Task:
+        """Task for document metadata summaries."""
+        return Task(
+            config=self.tasks_config['summarize_documents_task'],
+            agent=self.document_summary_agent()
         )
     
     # ==================== CREW DEFINITIONS ====================
@@ -233,6 +261,18 @@ class KYCAMLCrew:
             process=Process.sequential,
             verbose=True
         )
+
+    @crew
+    def summary_crew(self) -> Crew:
+        """
+        Creates the summary crew for document metadata summarization.
+        """
+        return Crew(
+            agents=[self.document_summary_agent()],
+            tasks=[self.summarize_documents_task()],
+            process=Process.sequential,
+            verbose=True
+        )
     
     # ==================== CONVENIENCE METHODS ====================
     
@@ -251,12 +291,6 @@ class KYCAMLCrew:
         crew = self.full_pipeline_crew()
         result = crew.kickoff(inputs=inputs)
         return result
-
-
-        results = {
-            'case_id': case_id,
-            'stages': {}
-        }
         
 class KYCAMLCrewFactory:
     """Factory for creating specialized KYC-AML crews."""
@@ -269,14 +303,6 @@ class KYCAMLCrewFactory:
     
     @staticmethod
     def create_classification_only_crew(llm: Optional[BaseLLM] = None) -> Crew:
-        """
-        Docstring for create_classification_only_crew
-        
-        :param llm: Description
-        :type llm: Optional[BaseLLM]
-        :return: Description
-        :rtype: Crew
-        """
         """Create a crew that only handles document classification."""
         crew_instance = KYCAMLCrew(llm=llm)
         return crew_instance.classification_crew()
@@ -315,3 +341,30 @@ def process_documents(case_id: str, file_paths: List[str],
         'case_id': case_id,
         'file_paths': file_paths
     })
+
+
+def summarize_documents(document_ids: List[str], llm: Optional[BaseLLM] = None) -> str:
+    """
+    Summarize documents by reading their metadata and using a summary agent.
+    """
+    crew = KYCAMLCrew(llm=llm)
+    documents_metadata = []
+
+    for document_id in document_ids:
+        result = get_document_by_id_tool.run(document_id=document_id)
+        if result.get("success"):
+            documents_metadata.append(result.get("metadata", {}))
+        else:
+            documents_metadata.append({
+                "document_id": document_id,
+                "error": result.get("error", "Metadata not found")
+            })
+
+    summary_result = crew.summary_crew().kickoff(inputs={
+        "document_ids": document_ids,
+        "documents_metadata": documents_metadata
+    })
+
+    if hasattr(summary_result, "raw"):
+        return str(summary_result.raw)
+    return str(summary_result)

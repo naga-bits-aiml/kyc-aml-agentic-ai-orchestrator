@@ -1,17 +1,29 @@
 """Main entry point for KYC-AML Agentic AI Orchestrator."""
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 import argparse
 import json
 import uuid
 from datetime import datetime
 
 # Pure CrewAI orchestration
-from flows import kickoff_flow, FLOW_AVAILABLE
-from crew import KYCAMLCrew, process_documents
+from flows import kickoff_flow
+from crew import process_documents
 
-from utilities import config, settings, logger
+from utilities import config, logger
+from utilities.llm_factory import create_llm
+
+
+def build_llm(model: str, temperature: float):
+    """Build the LLM instance based on configured provider."""
+    llm = create_llm(
+        provider=config.llm_provider,
+        model=model,
+        temperature=temperature
+    )
+    logger.info(f"Using {config.llm_provider} provider with model {model}")
+    return llm
 
 
 def process_with_flow(
@@ -34,32 +46,15 @@ def process_with_flow(
     Returns:
         Processing results dictionary
     """
-    # Initialize LLM based on provider
-    provider = config.llm_provider
-    
-    if provider == "google":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        llm = ChatGoogleGenerativeAI(
-            model=config.google_model,
-            temperature=temperature
-        )
-    elif provider == "openai":
-        from langchain_openai import ChatOpenAI
-        llm = ChatOpenAI(
-            model=model,
-            temperature=temperature
-        )
-    else:
-        raise ValueError(f"Unsupported LLM provider: {provider}")
-    
-    logger.info(f"Using {provider} provider with model {model}")
+    llm = build_llm(model=model, temperature=temperature)
     
     # Execute flow
     results = kickoff_flow(
         case_id=case_id,
         file_paths=document_paths,
         llm=llm,
-        visualize=visualize
+        visualize=visualize,
+        require_queue_confirmation=config.get('processing.require_queue_confirmation', False)
     )
     
     return results
@@ -118,6 +113,18 @@ def format_flow_summary(results: dict) -> str:
     return "\n".join(summary_lines)
 
 
+def normalize_results(result) -> dict:
+    """Normalize crew/flow outputs into a dictionary."""
+    if hasattr(result, "raw"):
+        try:
+            return json.loads(result.raw)
+        except json.JSONDecodeError:
+            return {"status": "unknown", "raw": str(result.raw)[:1000]}
+    if isinstance(result, dict):
+        return result
+    return {"status": "unknown", "raw": str(result)[:1000]}
+
+
 def main():
     """Main function to run the KYC-AML orchestrator."""
     parser = argparse.ArgumentParser(
@@ -157,7 +164,8 @@ Examples:
     
     parser.add_argument(
         "--use-crew",
-        help="Use batch classification (process multiple documents at once)"
+        action="store_true",
+        help="Use the legacy CrewAI pipeline instead of the Flow-based orchestrator"
     )
     
     parser.add_argument(
@@ -211,13 +219,6 @@ Examples:
             print("❌ Classifier API is not responding")
             print(f"   Check that the service is running at: {config.classifier_api_url}")
             return 1
-        if is_healthy:
-            print("✅ Classifier API is healthy and responding")
-            return 0
-        else:
-            print("❌ Classifier API is not responding")
-            print(f"   Check that the service is running at: {config.classifier_api_url}")
-            return 1
     
     # Validate documents argument
     if not args.documents:
@@ -245,30 +246,26 @@ Examples:
     
     # Process documents using CrewAI Flow
     try:
-        results = process_with_flow(
-            case_id=case_id,
-            document_paths=document_paths,
-            model=args.model,
-            temperature=args.temperature,
-            visualize=args.visualize_flow
-        )
-        
-        # Print summary
-        summary = format_flow_summary(results)
-        print(summary)
-        elif args.use_crew:
-            # Legacy CrewAI approach
-            results = orchestrator.process_with_crew(document_paths)
+        if args.use_crew:
+            llm = build_llm(model=args.model, temperature=args.temperature)
+            results = normalize_results(
+                process_documents(case_id=case_id, file_paths=document_paths, llm=llm)
+            )
         else:
-            # Legacy direct processing
-            results = orchestrator.process_documents(document_paths)
+            results = process_with_flow(
+                case_id=case_id,
+                document_paths=document_paths,
+                model=args.model,
+                temperature=args.temperature,
+                visualize=args.visualize_flow
+            )
         
         # Print summary
-        if args.use_flow:
+        if "documents" in results:
             summary = format_flow_summary(results)
+            print(summary)
         else:
-            summary = orchestrator.get_processing_summary(results)
-        print(summary)
+            print(json.dumps(results, indent=2, default=str))
         
         # Save to file if specified
         if args.output:

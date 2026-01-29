@@ -87,6 +87,9 @@ def get_documents_by_stage(stage: str) -> Dict[str, Any]:
     This tool searches across all document directories to find documents
     at the specified stage, regardless of case association.
     
+    Returns ALL documents at the stage - both parent PDFs and child images.
+    Let each stage naturally process or fail documents based on their type.
+    
     Args:
         stage: Stage name (intake/classification/extraction/processed)
         
@@ -124,17 +127,21 @@ def get_documents_by_stage(stage: str) -> Dict[str, Any]:
                     with open(metadata_file, 'r') as f:
                         metadata = json.load(f)
                     
-                    # Check if document is in requested stage
-                    if metadata.get('stage') == stage:
-                        documents.append({
-                            "document_id": metadata.get('document_id'),
-                            "original_filename": metadata.get('original_filename'),
-                            "stored_path": metadata.get('stored_path'),
-                            "stage": metadata.get('stage'),
-                            "document_type": metadata.get('classification', {}).get('document_type'),
-                            "confidence": metadata.get('classification', {}).get('confidence'),
-                            "last_updated": metadata.get('last_updated')
-                        })
+                    # Return all documents - agents check status blocks to determine readiness
+                    documents.append({
+                        "document_id": metadata.get('document_id'),
+                        "original_filename": metadata.get('original_filename'),
+                        "stored_path": metadata.get('stored_path'),
+                        "intake_status": metadata.get('intake', {}).get('status'),
+                        "classification_status": metadata.get('classification', {}).get('status'),
+                        "extraction_status": metadata.get('extraction', {}).get('status'),
+                        "document_type": metadata.get('classification', {}).get('additional_data', {}).get('document_type'),
+                        "confidence": metadata.get('classification', {}).get('additional_data', {}).get('confidence'),
+                        "last_updated": metadata.get('last_updated'),
+                        "generated_from_pdf": metadata.get('generated_from_pdf', False),
+                        "child_documents": metadata.get('child_documents', []),
+                        "source_document_id": metadata.get('source_document_id')
+                    })
                 except Exception as e:
                     logger.warning(f"Error reading metadata file {metadata_file}: {e}")
                     continue
@@ -376,9 +383,7 @@ def update_document_metadata_tool(
         # Update the stage block in metadata
         metadata[stage_name] = stage_block
         
-        # Update the current stage indicator if successful
-        if status == "success":
-            metadata["stage"] = stage_name
+        # Don't update stage field - it's vestigial, use status blocks instead
         
         metadata["last_updated"] = datetime.now().isoformat()
         

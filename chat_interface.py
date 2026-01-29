@@ -211,6 +211,179 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             self.logger.error(f"Processing error: {e}")
             return f"❌ Error processing documents: {str(e)}"
     
+    def add_directory_to_queue(self, directory_path: str, priority: int = 1) -> str:
+        """Add all documents from a directory to the processing queue."""
+        from flows.document_processing_flow import add_directory_to_queue
+        
+        try:
+            result = add_directory_to_queue(directory_path, priority=priority)
+            
+            if result['status'] == 'success':
+                msg = f"✅ {result['message']}\n\n"
+                msg += f"📊 Queue Status:\n"
+                status = result['queue_status']
+                msg += f"   • Pending: {status['pending']}\n"
+                msg += f"   • Total in queue: {status['total_queue']}\n"
+                msg += f"   • Processed: {status['total_processed']}\n"
+                return msg
+            else:
+                return f"❌ {result['message']}"
+        except Exception as e:
+            self.logger.error(f"Error adding directory to queue: {e}")
+            return f"❌ Error: {str(e)}"
+    
+    def add_files_to_queue(self, file_paths: List[str], priority: int = 1) -> str:
+        """Add multiple files to the processing queue."""
+        from flows.document_processing_flow import add_files_to_queue
+        
+        try:
+            result = add_files_to_queue(file_paths, priority=priority)
+            
+            if result['status'] == 'success':
+                msg = f"✅ {result['message']}\n\n"
+                msg += f"📊 Queue Status:\n"
+                status = result['queue_status']
+                msg += f"   • Pending: {status['pending']}\n"
+                msg += f"   • Total in queue: {status['total_queue']}\n"
+                msg += f"   • Processed: {status['total_processed']}\n"
+                return msg
+            else:
+                return f"❌ {result['message']}"
+        except Exception as e:
+            self.logger.error(f"Error adding files to queue: {e}")
+            return f"❌ Error: {str(e)}"
+    
+    def view_queue_status(self) -> str:
+        """View current queue status."""
+        from flows.document_processing_flow import get_queue_status
+        
+        try:
+            result = get_queue_status()
+            status = result['status']
+            pending = result['pending']
+            failed = result['failed']
+            
+            msg = "📊 Queue Status\n"
+            msg += "="*60 + "\n\n"
+            msg += f"📋 Summary:\n"
+            msg += f"   • Pending: {status['pending']}\n"
+            msg += f"   • Processing: {status['processing']}\n"
+            msg += f"   • Failed: {status['failed']}\n"
+            msg += f"   • Total in queue: {status['total_queue']}\n"
+            msg += f"   • Total processed: {status['total_processed']}\n\n"
+            
+            if pending:
+                msg += f"📄 Pending Documents ({len(pending)}):\n"
+                for entry in pending[:10]:  # Show first 10
+                    file_name = Path(entry['source_path']).name
+                    source = entry['source_type']
+                    msg += f"   • {entry['id']}: {file_name} (source: {source})\n"
+                if len(pending) > 10:
+                    msg += f"   ... and {len(pending) - 10} more\n"
+                msg += "\n"
+            
+            if failed:
+                msg += f"❌ Failed Documents ({len(failed)}):\n"
+                for entry in failed[:5]:  # Show first 5
+                    file_name = Path(entry['source_path']).name
+                    error = entry.get('error', 'Unknown error')
+                    msg += f"   • {entry['id']}: {file_name}\n"
+                    msg += f"     Error: {error}\n"
+                if len(failed) > 5:
+                    msg += f"   ... and {len(failed) - 5} more\n"
+            
+            return msg
+        except Exception as e:
+            self.logger.error(f"Error viewing queue: {e}")
+            return f"❌ Error: {str(e)}"
+    
+    def process_queue(self, max_documents: Optional[int] = None) -> str:
+        """Process documents from queue one by one."""
+        from flows.document_processing_flow import process_next_document_from_queue
+        
+        try:
+            processed_count = 0
+            failed_count = 0
+            skipped_count = 0
+            
+            print("\n🚀 Processing documents from queue...")
+            print("="*60 + "\n")
+            
+            while True:
+                # Check if we've hit max documents limit
+                if max_documents and processed_count >= max_documents:
+                    break
+                
+                # Process next document
+                result = process_next_document_from_queue(
+                    processing_mode='process',
+                    case_id=self.case_reference,
+                    llm=self.llm,
+                    auto_drain=False
+                )
+                
+                if result['status'] == 'complete':
+                    break  # No more documents
+                elif result['status'] == 'success':
+                    processed_count += 1
+                    doc_id = result.get('document_id', 'UNKNOWN')
+                    print(f"✅ Processed: {doc_id}")
+                elif result['status'] == 'failed':
+                    failed_count += 1
+                    queue_id = result.get('queue_id', 'UNKNOWN')
+                    error = result.get('error', 'Unknown error')
+                    print(f"❌ Failed: {queue_id} - {error}")
+                elif result['status'] == 'skipped':
+                    skipped_count += 1
+                    print(f"⏭️  Skipped document")
+            
+            # Summary
+            msg = f"\n📊 Queue Processing Complete\n"
+            msg += "="*60 + "\n\n"
+            msg += f"Results:\n"
+            msg += f"   • Processed: {processed_count}\n"
+            msg += f"   • Failed: {failed_count}\n"
+            msg += f"   • Skipped: {skipped_count}\n"
+            msg += f"   • Total: {processed_count + failed_count + skipped_count}\n"
+            
+            return msg
+        except Exception as e:
+            self.logger.error(f"Error processing queue: {e}")
+            return f"❌ Error: {str(e)}"
+    
+    def process_next_from_queue(self) -> str:
+        """Process just the next document from queue."""
+        from flows.document_processing_flow import process_next_document_from_queue
+        
+        try:
+            result = process_next_document_from_queue(
+                processing_mode='process',
+                case_id=self.case_reference,
+                llm=self.llm,
+                auto_drain=False
+            )
+            
+            if result['status'] == 'complete':
+                return "✅ Queue is empty - no more documents to process"
+            elif result['status'] == 'success':
+                doc_id = result.get('document_id', 'UNKNOWN')
+                msg = f"✅ Successfully processed document: {doc_id}\n\n"
+                msg += f"📊 Queue Status:\n"
+                status = result['queue_status']
+                msg += f"   • Pending: {status['pending']}\n"
+                msg += f"   • Failed: {status['failed']}\n"
+                return msg
+            elif result['status'] == 'failed':
+                error = result.get('error', 'Unknown error')
+                return f"❌ Failed to process document: {error}"
+            elif result['status'] == 'skipped':
+                return "⏭️  Document skipped by user"
+            else:
+                return f"⚠️  Unknown result status: {result['status']}"
+        except Exception as e:
+            self.logger.error(f"Error processing next document: {e}")
+            return f"❌ Error: {str(e)}"
+    
     def extract_file_paths(self, text: str) -> List[str]:
         """Extract file paths from user input."""
         paths = []
@@ -285,6 +458,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
    • Show current status  
    • Switch between cases
    • Process documents
+   • Manage document queue
 
 🔧 Commands:
    help, ?          Show this help
@@ -296,10 +470,20 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
    • Use ~ for home directory: ~/Documents/file.pdf
    • Quote paths with spaces: "~/My Documents/file.pdf"
 
+📋 Queue Management (NEW):
+   • Add directory to queue: "Queue all files from ~/Documents/kyc"
+   • Add files to queue: "Add passport.pdf and license.jpg to queue"
+   • View queue status: "Show queue status"
+   • Process queue: "Process all queued documents"
+   • Process next: "Process next document from queue"
+
 ✨ Examples:
    "Show me all cases"
    "Switch to case KYC-2024-001"
    "Process ~/Documents/passport.pdf"
+   "Queue all files from ~/Documents/uploads"
+   "Show queue status"
+   "Process next document from queue"
    "What's the current status?"
 """
     

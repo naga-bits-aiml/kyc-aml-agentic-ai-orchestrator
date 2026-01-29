@@ -198,6 +198,7 @@ def convert_pdf_to_images_tool(document_id: str, max_pages: int = 10) -> Dict[st
         # Update source PDF metadata to track child documents
         child_document_ids = [img["document_id"] for img in converted_images]
         source_metadata["child_documents"] = child_document_ids
+        source_metadata["converted_to_images"] = True
         source_metadata["conversion_timestamp"] = datetime.now().isoformat()
         source_metadata["total_pages_converted"] = len(converted_images)
         

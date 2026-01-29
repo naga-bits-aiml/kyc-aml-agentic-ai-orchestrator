@@ -4,15 +4,15 @@
       "base_url": "http://35.184.130.36/api/kyc_document_classifier/v1",
       "api_key": "${CLASSIFIER_API_KEY:}",
       "timeout": 30,
-      "max_retries": 3,
-      "retry_delay": 2
+      "max_retries": 1,
+      "retry_delay": 3
     },
     "ocr": {
       "base_url": "${OCR_API_BASE_URL:https://vision.googleapis.com/v1/images:annotate}",
       "api_key": "${OCR_API_KEY:}",
       "timeout": 60,
-      "max_retries": 3,
-      "retry_delay": 2,
+      "max_retries": 1,
+      "retry_delay": 3,
       "provider": "google_vision",
       "confidence_threshold": 0.7
     }
