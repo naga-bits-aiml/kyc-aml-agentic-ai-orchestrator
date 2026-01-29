@@ -7,9 +7,9 @@ import json
 import uuid
 from datetime import datetime
 
-# Pure CrewAI orchestration
+# CrewAI orchestration via pipeline flow
 from flows import kickoff_flow
-from crew import process_documents
+from pipeline_flow import run_pipeline_sync
 
 from utilities import config, logger
 from utilities.llm_factory import create_llm
@@ -141,9 +141,6 @@ Examples:
   # Use batch classification
   python main.py --documents doc1.pdf doc2.pdf --batch
 
-  # Use CrewAI workflow
-  python main.py --documents doc1.pdf doc2.pdf --use-crew
-
   # Check classifier health
   python main.py --health-check
         """
@@ -160,12 +157,6 @@ Examples:
         "--batch",
         action="store_true",
         help="Use batch classification endpoint"
-    )
-    
-    parser.add_argument(
-        "--use-crew",
-        action="store_true",
-        help="Use the legacy CrewAI pipeline instead of the Flow-based orchestrator"
     )
     
     parser.add_argument(
@@ -246,19 +237,13 @@ Examples:
     
     # Process documents using CrewAI Flow
     try:
-        if args.use_crew:
-            llm = build_llm(model=args.model, temperature=args.temperature)
-            results = normalize_results(
-                process_documents(case_id=case_id, file_paths=document_paths, llm=llm)
-            )
-        else:
-            results = process_with_flow(
-                case_id=case_id,
-                document_paths=document_paths,
-                model=args.model,
-                temperature=args.temperature,
-                visualize=args.visualize_flow
-            )
+        results = process_with_flow(
+            case_id=case_id,
+            document_paths=document_paths,
+            model=args.model,
+            temperature=args.temperature,
+            visualize=args.visualize_flow
+        )
         
         # Print summary
         if "documents" in results:

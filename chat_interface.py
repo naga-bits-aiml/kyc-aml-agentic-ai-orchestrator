@@ -10,6 +10,7 @@ This interface integrates with the new pipeline agents:
 """
 import sys
 import re
+import json
 from pathlib import Path
 from typing import List, Optional
 from pipeline_crew import DocumentProcessingCrew, create_pipeline_crew
@@ -177,17 +178,45 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             return f"❌ Error: {str(e)}"
     
     def set_case_reference(self, case_ref: str) -> str:
-        """Set active case reference."""
+        """Set active case reference and create metadata if new."""
+        from datetime import datetime
+        
         self.case_reference = case_ref.strip().upper()
         
         # Check if case exists
         case_dir = Path(settings.documents_dir) / "cases" / self.case_reference
-        if case_dir.exists():
-            doc_count = len(list(case_dir.glob("*.pdf"))) + len(list(case_dir.glob("*.jpg")))
-            return f"✅ Loaded existing case: {self.case_reference}\n   📁 {doc_count} documents found"
+        metadata_file = case_dir / "case_metadata.json"
+        
+        if case_dir.exists() and metadata_file.exists():
+            # Load existing case
+            try:
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                doc_count = len(metadata.get('documents', []))
+                return f"✅ Loaded existing case: {self.case_reference}\n   📁 {doc_count} documents linked"
+            except:
+                doc_count = len(list(case_dir.glob("*.pdf"))) + len(list(case_dir.glob("*.jpg")))
+                return f"✅ Loaded existing case: {self.case_reference}\n   📁 {doc_count} documents found"
         else:
+            # Create new case with metadata
             case_dir.mkdir(parents=True, exist_ok=True)
-            return f"✅ Created new case: {self.case_reference}"
+            
+            # Create case metadata
+            metadata = {
+                "case_reference": self.case_reference,
+                "created_date": datetime.now().isoformat(),
+                "status": "active",
+                "workflow_stage": "intake",
+                "documents": [],
+                "description": "",
+                "last_updated": datetime.now().isoformat()
+            }
+            
+            with open(metadata_file, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            self.logger.info(f"Created new case with metadata: {self.case_reference}")
+            return f"✅ Created new case: {self.case_reference}\n   📋 Case metadata initialized"
     
     def process_documents(self, file_paths: List[str]) -> str:
         """Process documents using CrewAI pipeline flow."""
@@ -402,7 +431,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         return None
     
     def handle_command(self, user_input: str) -> Optional[str]:
-        """Handle only critical system commands (exit, help, reload)."""
+        """Handle quick commands (exit, help, reload, show cases, show docs, select case)."""
         cmd = user_input.strip().lower()
         
         if cmd in ['help', '/help', '?']:
@@ -414,7 +443,175 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         if cmd in ['exit', 'quit', 'bye', '/exit']:
             return "exit"
         
+        # Quick commands for cases and documents
+        if cmd in ['show cases', 'list cases', 'cases']:
+            return self._show_cases()
+        
+        if cmd in ['show docs', 'list docs', 'docs', 'show documents', 'list documents']:
+            return self._show_documents()
+        
+        if cmd in ['status', 'show status']:
+            return self._show_status()
+        
+        # Handle "select case <case_id>" or "use case <case_id>"
+        if cmd.startswith('select case ') or cmd.startswith('use case '):
+            case_id = cmd.split(' ', 2)[-1].strip().upper()
+            return self._select_case(case_id)
+        
         return None
+    
+    def _show_cases(self, limit: int = 10) -> str:
+        """Show recent cases with metadata summary."""
+        cases_dir = Path(settings.documents_dir) / "cases"
+        
+        if not cases_dir.exists():
+            return "📋 No cases found. Create one with: 'create case KYC-2026-001'"
+        
+        case_dirs = sorted(
+            [d for d in cases_dir.iterdir() if d.is_dir()],
+            key=lambda x: x.stat().st_mtime,
+            reverse=True
+        )[:limit]
+        
+        if not case_dirs:
+            return "📋 No cases found. Create one with: 'create case KYC-2026-001'"
+        
+        msg = f"\n📋 Cases (showing {len(case_dirs)} of {len(list(cases_dir.iterdir()))}):\n"
+        msg += "=" * 60 + "\n\n"
+        
+        for case_dir in case_dirs:
+            case_id = case_dir.name
+            is_current = " ← ACTIVE" if case_id == self.case_reference else ""
+            
+            # Load case metadata if exists
+            metadata_file = case_dir / "case_metadata.json"
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+                    doc_count = len(metadata.get('documents', []))
+                    status = metadata.get('status', 'unknown')
+                    created = metadata.get('created_date', '')[:10]  # Just the date part
+                    msg += f"  📁 {case_id}{is_current}\n"
+                    msg += f"     📄 {doc_count} docs | 📅 {created} | 🏷️ {status}\n\n"
+                except:
+                    msg += f"  📁 {case_id}{is_current}\n\n"
+            else:
+                # Count files directly
+                doc_count = len(list(case_dir.glob("*.*"))) - len(list(case_dir.glob("*.json")))
+                msg += f"  📁 {case_id}{is_current}\n"
+                msg += f"     📄 ~{max(0, doc_count)} files\n\n"
+        
+        msg += "💡 Commands: 'select case <ID>' | 'show docs' | 'create case <ID>'\n"
+        return msg
+    
+    def _show_documents(self, limit: int = 10) -> str:
+        """Show recent documents from intake folder with status."""
+        intake_dir = Path(settings.documents_dir) / "intake"
+        
+        if not intake_dir.exists():
+            return "📄 No documents found. Process some documents first."
+        
+        # Get all metadata files (one per document)
+        metadata_files = sorted(
+            intake_dir.glob("*.metadata.json"),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True
+        )[:limit]
+        
+        if not metadata_files:
+            return "📄 No documents found in intake. Process some documents first."
+        
+        msg = f"\n📄 Recent Documents (showing {len(metadata_files)}):\n"
+        msg += "=" * 60 + "\n\n"
+        
+        for meta_file in metadata_files:
+            try:
+                with open(meta_file, 'r') as f:
+                    metadata = json.load(f)
+                
+                doc_id = metadata.get('document_id', 'unknown')
+                doc_type = metadata.get('classification', {}).get('document_type', 'unclassified')
+                queue_status = metadata.get('queue', {}).get('status', 'unknown')
+                class_status = metadata.get('classification', {}).get('status', 'pending')
+                extract_status = metadata.get('extraction', {}).get('status', 'pending')
+                linked_cases = metadata.get('linked_cases', [])
+                
+                # Status emoji
+                status_emoji = "✅" if queue_status == "completed" else "⏳" if queue_status == "pending" else "❌"
+                
+                msg += f"  {status_emoji} {doc_id}\n"
+                msg += f"     Type: {doc_type} | Class: {class_status} | Extract: {extract_status}\n"
+                if linked_cases:
+                    msg += f"     📁 Cases: {', '.join(linked_cases)}\n"
+                msg += "\n"
+            except Exception as e:
+                continue
+        
+        msg += "💡 Commands: 'link doc <DOC_ID> to case <CASE_ID>' | 'show cases'\n"
+        return msg
+    
+    def _show_status(self) -> str:
+        """Show current system status."""
+        msg = "\n📊 System Status\n"
+        msg += "=" * 60 + "\n\n"
+        msg += f"  🤖 LLM: {'✅ Connected' if self.llm else '❌ Not connected'}\n"
+        msg += f"  ⚙️  Crew: {'✅ Ready' if self.crew else '❌ Not initialized'}\n"
+        msg += f"  📁 Active Case: {self.case_reference or 'None selected'}\n\n"
+        
+        # Count documents in intake
+        intake_dir = Path(settings.documents_dir) / "intake"
+        if intake_dir.exists():
+            doc_count = len(list(intake_dir.glob("*.metadata.json")))
+            msg += f"  📄 Documents in intake: {doc_count}\n"
+        
+        # Count cases
+        cases_dir = Path(settings.documents_dir) / "cases"
+        if cases_dir.exists():
+            case_count = len([d for d in cases_dir.iterdir() if d.is_dir()])
+            msg += f"  📋 Total cases: {case_count}\n"
+        
+        msg += "\n💡 Commands: 'show cases' | 'show docs' | 'help'\n"
+        return msg
+    
+    def _select_case(self, case_id: str) -> str:
+        """Select a case and load its context."""
+        case_id = case_id.upper()
+        case_dir = Path(settings.documents_dir) / "cases" / case_id
+        
+        if not case_dir.exists():
+            return f"❌ Case {case_id} not found.\n💡 Create it with: 'create case {case_id}'"
+        
+        self.case_reference = case_id
+        
+        # Load case metadata
+        metadata_file = case_dir / "case_metadata.json"
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                doc_count = len(metadata.get('documents', []))
+                status = metadata.get('status', 'unknown')
+                created = metadata.get('created_date', '')[:10]
+                
+                msg = f"✅ Selected case: {case_id}\n\n"
+                msg += f"  📅 Created: {created}\n"
+                msg += f"  🏷️  Status: {status}\n"
+                msg += f"  📄 Documents: {doc_count}\n"
+                
+                # Show linked documents
+                if metadata.get('documents'):
+                    msg += f"\n  📋 Linked Documents:\n"
+                    for doc_id in metadata.get('documents', [])[:5]:
+                        msg += f"     • {doc_id}\n"
+                    if len(metadata.get('documents', [])) > 5:
+                        msg += f"     ... and {len(metadata.get('documents', [])) - 5} more\n"
+                
+                return msg
+            except:
+                pass
+        
+        return f"✅ Selected case: {case_id}"
     
     def show_help(self) -> str:
         """Show help information."""
@@ -423,6 +620,15 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
 ║     KYC-AML Pipeline Chat Interface - Help         ║
 ╚════════════════════════════════════════════════════╝
 
+⚡ Quick Commands:
+   show cases       List recent cases (10)
+   show docs        List recent documents (10)
+   select case <ID> Select a case and load context
+   status           Show system status
+   help, ?          Show this help
+   reload           Reload code and restart
+   exit, quit       Exit chat
+
 🤖 Pipeline Agents:
    • QueueAgent: Scans paths, expands folders, splits PDFs
    • ClassificationAgent: Classifies documents via REST API
@@ -430,46 +636,29 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
    • MetadataAgent: Tracks status and handles errors
    • SummaryAgent: Generates processing reports
 
-📋 Quick Start:
-   1. Ask: "List all cases" or "Show me the cases"
-   2. Say: "Switch to case KYC-2024-001"
-   3. Say: "What's the status?"
-   4. Provide document path: "Process ~/Documents/passport.pdf"
-   5. Run full pipeline: "Run pipeline on ~/Documents/kyc_docs"
-
-💬 Natural Language:
-   Just ask naturally! The AI assistant has tools to:
-   • List all cases
-   • Show current status  
-   • Switch between cases
-   • Process documents with pipeline agents
-   • Manage document queue
-
-🔧 Commands:
-   help, ?          Show this help
-   reload, restart  Reload code and restart interface
-   exit, quit       Exit chat
+📋 Case Management:
+   "create case KYC-2026-001"    Create new case
+   "select case KYC-2026-001"    Select existing case
+   "link doc DOC_xxx to case KYC-2026-001"  Link document to case
 
 📄 Document Processing:
-   • Provide full file path: /path/to/document.pdf
-   • Use ~ for home directory: ~/Documents/file.pdf
-   • Quote paths with spaces: "~/My Documents/file.pdf"
-   • Process folder: "Run pipeline on ~/Documents/kyc"
+   "process ~/Documents/passport.pdf"  Process single file
+   "run pipeline on ~/Documents/kyc"   Process folder
+   "show queue status"                 View processing queue
 
-📋 Queue Management:
-   • Add directory to queue: "Queue all files from ~/Documents/kyc"
-   • View queue status: "Show queue status"
-   • Process queue: "Process all queued documents"
-   • Process next: "Process next document from queue"
+💬 Natural Language:
+   Just ask naturally! The AI assistant can:
+   • List all cases and documents
+   • Show case details and document metadata
+   • Process documents with pipeline agents
+   • Link documents to cases
 
 ✨ Examples:
-   "Show me all cases"
-   "Switch to case KYC-2024-001"
-   "Process ~/Documents/passport.pdf"
-   "Run pipeline on ~/Documents/uploads"
-   "Show queue status"
-   "Process next document from queue"
-   "What's the current status?"
+   "show cases"
+   "select case KYC-2026-001"
+   "show docs"
+   "process ~/Downloads/pan-1.pdf"
+   "link doc DOC_20260129_231813_A2DF2 to case KYC-2026-001"
 """
     
     def handle_user_input(self, user_input: str) -> str:

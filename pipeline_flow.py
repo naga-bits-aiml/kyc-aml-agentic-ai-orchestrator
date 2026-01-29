@@ -416,6 +416,9 @@ def run_pipeline_sync(input_path: str) -> Dict[str, Any]:
     """
     Run the pipeline synchronously without Flow (fallback).
     
+    Documents are processed independently. Use link_document_to_case
+    to associate documents with cases after processing.
+    
     Args:
         input_path: File or folder path to process
         

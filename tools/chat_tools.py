@@ -50,6 +50,99 @@ def create_chat_tools(chat_interface):
         return msg
     
     @tool
+    def list_all_documents(limit: int = 10, filter_by: Optional[str] = None) -> str:
+        """List all documents in the system from the intake folder.
+        
+        Shows recent documents with their classification and processing status.
+        Documents are sorted by most recent first.
+        
+        Args:
+            limit: Maximum number of documents to show (default: 10)
+            filter_by: Optional filter - 'completed', 'pending', 'failed', or document type like 'pan', 'passport'
+            
+        Returns:
+            Formatted list of documents with status and metadata.
+        """
+        intake_dir = Path(settings.documents_dir) / "intake"
+        
+        if not intake_dir.exists():
+            return "📄 No documents found. Process some documents first."
+        
+        # Get all metadata files
+        metadata_files = sorted(
+            intake_dir.glob("*.metadata.json"),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True
+        )
+        
+        if not metadata_files:
+            return "📄 No documents found in intake."
+        
+        # Load and filter documents
+        documents = []
+        for meta_file in metadata_files:
+            try:
+                with open(meta_file, 'r') as f:
+                    metadata = json.load(f)
+                
+                # Apply filter if specified
+                if filter_by:
+                    filter_lower = filter_by.lower()
+                    queue_status = metadata.get('queue', {}).get('status', '')
+                    doc_type = metadata.get('classification', {}).get('document_type', '')
+                    
+                    # Check if filter matches status or document type
+                    if filter_lower not in [queue_status.lower(), doc_type.lower()]:
+                        continue
+                
+                documents.append(metadata)
+                
+                if len(documents) >= limit:
+                    break
+            except:
+                continue
+        
+        if not documents:
+            filter_msg = f" matching '{filter_by}'" if filter_by else ""
+            return f"📄 No documents found{filter_msg}."
+        
+        msg = f"\n📄 Documents ({len(documents)} of {len(metadata_files)}):\n"
+        msg += "=" * 60 + "\n\n"
+        
+        for doc in documents:
+            doc_id = doc.get('document_id', 'unknown')
+            doc_type = doc.get('classification', {}).get('document_type', 'unclassified')
+            queue_status = doc.get('queue', {}).get('status', 'unknown')
+            class_status = doc.get('classification', {}).get('status', 'pending')
+            extract_status = doc.get('extraction', {}).get('status', 'pending')
+            linked_cases = doc.get('linked_cases', [])
+            confidence = doc.get('classification', {}).get('confidence')
+            
+            # Status emoji
+            if queue_status == "completed":
+                status_emoji = "✅"
+            elif queue_status == "pending":
+                status_emoji = "⏳"
+            elif queue_status == "failed":
+                status_emoji = "❌"
+            else:
+                status_emoji = "❓"
+            
+            msg += f"  {status_emoji} {doc_id}\n"
+            msg += f"     📋 Type: {doc_type}"
+            if confidence:
+                msg += f" ({confidence:.0%})"
+            msg += "\n"
+            msg += f"     ⚙️  Class: {class_status} | Extract: {extract_status}\n"
+            
+            if linked_cases:
+                msg += f"     📁 Linked to: {', '.join(linked_cases)}\n"
+            msg += "\n"
+        
+        msg += f"💡 Use 'link_document_to_case' to link a document to a case\n"
+        return msg
+    
+    @tool
     def get_current_status() -> str:
         """Get the current system status including active case and document counts.
         
@@ -947,79 +1040,39 @@ def create_chat_tools(chat_interface):
     @tool
     def link_document_to_case(document_id: str, case_id: str) -> str:
         """
-        Manually link an existing document to a case.
-        
-        Note: Normally, documents are automatically linked when processed with a case_id.
-        Use this tool only for:
-        - Linking documents that were processed without a case
-        - Moving documents between cases
-        - Manual corrections
+        Link a document to a case by adding document ID to case metadata.
         
         Args:
             document_id: Document ID (e.g., DOC_20260127_143022_A3F8B)
-            case_id: Case ID (e.g., KYC-2026-001)
+            case_id: Case ID (e.g., KYC_2026_001)
             
         Returns:
             Status message indicating success or failure
         """
         try:
-            # Find document metadata file in intake or other stages
-            stages = ["intake", "classification", "extraction", "processed"]
-            metadata_path = None
-            current_stage = None
+            case_dir = Path(settings.documents_dir) / "cases" / case_id
+            case_metadata_path = case_dir / "case_metadata.json"
             
-            for stage in stages:
-                potential_path = Path(settings.documents_dir) / stage / f"{document_id}.metadata.json"
-                if potential_path.exists():
-                    metadata_path = potential_path
-                    current_stage = stage
-                    break
+            if not case_metadata_path.exists():
+                return f"❌ Case {case_id} not found. Create case first."
             
-            if not metadata_path:
-                return f"❌ Document {document_id} not found in any stage"
+            with open(case_metadata_path, 'r') as f:
+                case_metadata = json.load(f)
             
-            # Load existing metadata
-            with open(metadata_path, 'r') as f:
-                metadata = json.load(f)
+            if "documents" not in case_metadata:
+                case_metadata["documents"] = []
             
-            # Add case to linked_cases if not already present
-            if "linked_cases" not in metadata:
-                metadata["linked_cases"] = []
-            
-            if case_id not in metadata["linked_cases"]:
-                metadata["linked_cases"].append(case_id)
-                metadata["last_updated"] = datetime.now().isoformat()
-                
-                # Save updated document metadata
-                with open(metadata_path, 'w') as f:
-                    json.dump(metadata, f, indent=2)
-                
-                # Now update the case metadata to include this document
-                case_dir = Path(settings.documents_dir) / "cases" / case_id
-                case_metadata_path = case_dir / "case_metadata.json"
-                
-                if case_metadata_path.exists():
-                    with open(case_metadata_path, 'r') as f:
-                        case_metadata = json.load(f)
-                    
-                    # Add document_id to case's documents list if not already present
-                    if "documents" not in case_metadata:
-                        case_metadata["documents"] = []
-                    
-                    if document_id not in case_metadata["documents"]:
-                        case_metadata["documents"].append(document_id)
-                        
-                        # Save updated case metadata
-                        with open(case_metadata_path, 'w') as f:
-                            json.dump(case_metadata, f, indent=2)
-                        
-                        logger.info(f"Manually linked document {document_id} to case {case_id}")
-                else:
-                    logger.warning(f"Case metadata file not found: {case_metadata_path}")
-                
-                return f"✅ Document {document_id} successfully linked to case {case_id}\n   Stage: {current_stage}"
-            else:
+            if document_id in case_metadata["documents"]:
                 return f"ℹ️  Document {document_id} already linked to case {case_id}"
+            
+            case_metadata["documents"].append(document_id)
+            case_metadata["last_updated"] = datetime.now().isoformat()
+            
+            with open(case_metadata_path, 'w') as f:
+                json.dump(case_metadata, f, indent=2)
+            
+            logger.info(f"Linked document {document_id} to case {case_id}")
+            return f"✅ Document {document_id} linked to case {case_id}"
                 
         except Exception as e:
             logger.error(f"Failed to link document to case: {e}", exc_info=True)
@@ -1351,7 +1404,8 @@ def create_chat_tools(chat_interface):
             return f"❌ Error: {str(e)}"
     
     return [
-        list_all_cases, 
+        list_all_cases,
+        list_all_documents,  # NEW: List documents with filtering
         get_current_status, 
         switch_case, 
         get_case_details, 
