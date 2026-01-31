@@ -625,8 +625,8 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         return f"✅ Selected case: {case_id}"
     
     def _summarize_case(self, case_id: str) -> str:
-        """Generate and update case summary with KYC data from documents."""
-        from tools.case_summary_tools import generate_case_summary_tool, update_case_summary_tool
+        """Generate comprehensive case summary using LLM."""
+        from tools.case_summary_tools import generate_comprehensive_case_summary_tool
         
         case_id = case_id.upper()
         case_dir = Path(settings.documents_dir) / "cases" / case_id
@@ -634,76 +634,125 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         if not case_dir.exists():
             return f"❌ Case {case_id} not found."
         
-        msg = f"\n📊 Generating summary for case {case_id}...\n"
+        msg = f"\n📊 Generating comprehensive summary for case {case_id}...\n"
+        msg += "(Using LLM to analyze all documents)\n\n"
         
         try:
-            # Generate summary from document metadata
-            result = generate_case_summary_tool.run(case_id)
+            # Generate comprehensive summary using LLM
+            result = generate_comprehensive_case_summary_tool.run(case_id)
             
             if not result.get('success'):
                 return msg + f"❌ Failed: {result.get('error', 'Unknown error')}"
             
-            case_summary = result['case_summary']
-            
-            # Update case metadata with summary
-            update_result = update_case_summary_tool.run(case_id=case_id, case_summary=case_summary)
-            
-            if not update_result.get('success'):
-                return msg + f"❌ Failed to save: {update_result.get('error')}"
+            summary = result['case_summary']
             
             # Format output
             msg += "=" * 60 + "\n\n"
             
-            # ID Proof
-            id_proof = case_summary.get('id_proof', {})
-            msg += f"🪪 ID Proof:\n"
-            if id_proof.get('documents'):
-                msg += f"   Documents: {len(id_proof['documents'])}\n"
-                extracted = id_proof.get('extracted_data', {})
-                if extracted.get('name'):
-                    msg += f"   • Name: {extracted['name']}\n"
-                if extracted.get('dob'):
-                    msg += f"   • DOB: {extracted['dob']}\n"
-                if extracted.get('father_name'):
-                    msg += f"   • Father: {extracted['father_name']}\n"
-                if extracted.get('document_number'):
-                    msg += f"   • Doc #: {extracted['document_number']}\n"
-            else:
-                msg += "   ⚠️  No documents\n"
+            # Primary Entity
+            primary = summary.get('primary_entity', {})
+            if primary:
+                entity_type = primary.get('entity_type', 'unknown').upper()
+                msg += f"🏢 PRIMARY ENTITY: {primary.get('name', 'Unknown')}\n"
+                msg += f"   Type: {entity_type}\n"
+                if primary.get('description'):
+                    msg += f"   {primary.get('description')}\n"
+                msg += "\n"
             
-            # Address Proof
-            addr_proof = case_summary.get('address_proof', {})
-            msg += f"\n🏠 Address Proof:\n"
-            if addr_proof.get('documents'):
-                msg += f"   Documents: {len(addr_proof['documents'])}\n"
-                extracted = addr_proof.get('extracted_data', {})
-                if extracted.get('address'):
-                    msg += f"   • Address: {extracted['address']}\n"
-            else:
-                msg += "   ⚠️  No documents\n"
+            # Companies (actual businesses being KYC'd, not document issuers)
+            companies = summary.get('companies', [])
+            if companies:
+                msg += f"🏛️  COMPANIES ({len(companies)}):\n"
+                for company in companies:
+                    msg += f"   • {company.get('name', 'Unknown')}\n"
+                    if company.get('cin'):
+                        msg += f"     CIN: {company.get('cin')}\n"
+                    if company.get('registered_address'):
+                        msg += f"     Address: {company.get('registered_address')}\n"
+                    if company.get('date_of_incorporation'):
+                        msg += f"     Incorporated: {company.get('date_of_incorporation')}\n"
+                    if company.get('paid_up_capital'):
+                        msg += f"     Capital: ₹{company.get('paid_up_capital')}\n"
+                    if company.get('gstin'):
+                        msg += f"     GSTIN: {company.get('gstin')}\n"
+                    if company.get('business_type'):
+                        msg += f"     Business: {company.get('business_type')}\n"
+                msg += "\n"
             
-            # Financial Statement
-            fin_stmt = case_summary.get('financial_statement', {})
-            msg += f"\n💰 Financial Statement:\n"
-            if fin_stmt.get('documents'):
-                msg += f"   Documents: {len(fin_stmt['documents'])}\n"
-                extracted = fin_stmt.get('extracted_data', {})
-                if extracted.get('account_number'):
-                    msg += f"   • Account: {extracted['account_number']}\n"
-            else:
-                msg += "   ⚠️  No documents\n"
+            # KYC Agencies (document issuers - government, banks, utilities)
+            agencies = summary.get('kyc_agencies', [])
+            if agencies:
+                msg += f"🏦 KYC AGENCIES ({len(agencies)}):\n"
+                msg += "   (Organizations that issued identity documents)\n"
+                for agency in agencies:
+                    agency_type = agency.get('agency_type', 'other')
+                    type_emoji = {"government": "🏛️", "bank": "🏦", "utility": "⚡", "other": "📋"}.get(agency_type, "📋")
+                    msg += f"   {type_emoji} {agency.get('name', 'Unknown')}\n"
+                    docs = agency.get('documents_issued', [])
+                    if docs:
+                        msg += f"      Documents: {', '.join(docs)}\n"
+                msg += "\n"
             
-            # Verification Status
-            status = case_summary.get('verification_status', 'unknown')
-            status_emoji = "✅" if status == "complete" else "⏳" if status == "partial" else "❌"
-            msg += f"\n{status_emoji} Verification Status: {status.upper()}\n"
+            # Persons
+            persons = summary.get('persons', [])
+            if persons:
+                msg += f"👥 PERSONS ({len(persons)}):\n"
+                for person in persons:
+                    role = person.get('role', '')
+                    role_str = f" ({role})" if role else ""
+                    msg += f"   • {person.get('name', 'Unknown')}{role_str}\n"
+                    if person.get('pan_number'):
+                        msg += f"     PAN: {person.get('pan_number')}\n"
+                    if person.get('date_of_birth'):
+                        msg += f"     DOB: {person.get('date_of_birth')}\n"
+                    if person.get('address'):
+                        msg += f"     Address: {person.get('address')}\n"
+                    if person.get('mobile'):
+                        msg += f"     Mobile: {person.get('mobile')}\n"
+                    if person.get('email'):
+                        msg += f"     Email: {person.get('email')}\n"
+                msg += "\n"
             
-            # Consistency
-            checks = case_summary.get('consistency_checks', {})
-            if checks.get('name_consistency', {}).get('status') == 'consistent':
-                msg += "✅ Name consistency: OK\n"
+            # Relationships
+            relationships = summary.get('relationships', [])
+            if relationships:
+                msg += f"🔗 RELATIONSHIPS:\n"
+                for rel in relationships:
+                    msg += f"   • {rel.get('person')} {rel.get('relationship')} {rel.get('entity')}\n"
+                msg += "\n"
             
-            msg += "\n💡 Case metadata updated!\n"
+            # KYC Verification Status
+            verification = summary.get('kyc_verification', {})
+            if verification:
+                msg += "📋 KYC VERIFICATION:\n"
+                id_verified = "✅" if verification.get('identity_verified') else "❌"
+                addr_verified = "✅" if verification.get('address_verified') else "❌"
+                company_verified = "✅" if verification.get('company_verified') else "❌"
+                
+                msg += f"   {id_verified} Identity Verified\n"
+                msg += f"   {addr_verified} Address Verified\n"
+                msg += f"   {company_verified} Company Verified\n"
+                
+                missing_docs = verification.get('missing_documents', [])
+                if missing_docs:
+                    msg += f"\n   ⚠️  Missing Documents:\n"
+                    for doc in missing_docs:
+                        msg += f"      • {doc}\n"
+                
+                missing_info = verification.get('missing_information', [])
+                if missing_info:
+                    msg += f"\n   ⚠️  Missing Information:\n"
+                    for info in missing_info:
+                        msg += f"      • {info}\n"
+                msg += "\n"
+            
+            # Summary
+            if summary.get('summary'):
+                msg += f"📝 SUMMARY:\n"
+                msg += f"   {summary.get('summary')}\n\n"
+            
+            msg += f"📄 Documents analyzed: {summary.get('document_count', 0)}\n"
+            msg += "💡 Case metadata updated!\n"
             return msg
             
         except Exception as e:

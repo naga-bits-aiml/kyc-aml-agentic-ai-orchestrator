@@ -849,7 +849,6 @@ def create_chat_tools(chat_interface):
         try:
             from tools.classification_api_tools import classify_document
             from tools.extraction_api_tools import extract_document_data
-            from tools.metadata_tools import update_processing_status, get_document_metadata
             
             # Find document metadata in intake directory
             intake_dir = Path(settings.documents_dir) / "intake"
@@ -900,12 +899,6 @@ def create_chat_tools(chat_interface):
                     doc_type = class_result.get('document_type')
                     confidence = class_result.get('confidence', 0)
                     msg += f"   ✅ Classified as: {doc_type} (confidence: {confidence:.1%})\n"
-                    
-                    # Update metadata
-                    update_processing_status(document_id, 'classification', 'completed', {
-                        'document_type': doc_type,
-                        'confidence': confidence
-                    })
                 else:
                     msg += f"   ❌ Classification failed: {class_result.get('error')}\n"
                     return msg
@@ -916,22 +909,25 @@ def create_chat_tools(chat_interface):
             # Extraction if needed
             if extraction_status != 'completed':
                 msg += "\n📊 Running ExtractionAgent...\n"
-                extract_result = extract_document_data(stored_path, doc_type)
+                extract_result = extract_document_data.invoke({"document_id": document_id, "document_type": doc_type})
                 
                 if extract_result.get('success'):
                     extracted_fields = extract_result.get('extracted_fields', {})
+                    kyc_data = extract_result.get('kyc_data', {})
                     msg += f"   ✅ Extracted {len(extracted_fields)} field(s)\n"
                     
-                    # Show some fields
-                    for field, value in list(extracted_fields.items())[:5]:
-                        msg += f"      • {field}: {value}\n"
-                    if len(extracted_fields) > 5:
-                        msg += f"      ... and {len(extracted_fields) - 5} more\n"
-                    
-                    # Update metadata
-                    update_processing_status(document_id, 'extraction', 'completed', {
-                        'extracted_fields': extracted_fields
-                    })
+                    # Show KYC entities if available
+                    if kyc_data.get('entities'):
+                        msg += f"   📋 Found {kyc_data.get('entity_count', 0)} entities:\n"
+                        for entity in kyc_data.get('entities', [])[:3]:
+                            etype = entity.get('entity_type', 'unknown')
+                            name = entity.get('full_name') or entity.get('company_name') or 'Unknown'
+                            msg += f"      • {etype}: {name}\n"
+                    elif extracted_fields:
+                        # Show some fields
+                        for field, value in list(extracted_fields.items())[:5]:
+                            if field not in ['raw_text', 'word_count', 'char_count']:
+                                msg += f"      • {field}: {value}\n"
                 else:
                     msg += f"   ❌ Extraction failed: {extract_result.get('error')}\n"
                     return msg
@@ -1156,7 +1152,7 @@ def create_chat_tools(chat_interface):
                 
                 # Extraction
                 msg += "📊 Running ExtractionAgent...\n"
-                extract_result = extract_document_data(file_path, doc_type)
+                extract_result = extract_document_data.invoke({"document_id": doc_id, "document_type": doc_type})
                 
                 if extract_result.get('success'):
                     extracted_fields = extract_result.get('extracted_fields', {})
@@ -1226,7 +1222,7 @@ def create_chat_tools(chat_interface):
                     doc_type = class_result.get('document_type')
                     
                     # Extraction
-                    extract_result = extract_document_data(file_path, doc_type)
+                    extract_result = extract_document_data.invoke({"document_id": doc_id, "document_type": doc_type})
                     
                     if extract_result.get('success'):
                         mark_document_processed(doc_id, 'completed')

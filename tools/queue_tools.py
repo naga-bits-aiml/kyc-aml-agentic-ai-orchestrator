@@ -124,7 +124,8 @@ def create_metadata_file(
     document_id: str,
     parent_id: Optional[str] = None,
     page_number: Optional[int] = None,
-    total_pages: Optional[int] = None
+    total_pages: Optional[int] = None,
+    original_filename: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Create metadata JSON file for a document.
@@ -135,6 +136,7 @@ def create_metadata_file(
         parent_id: Parent document ID (for PDF pages)
         page_number: Page number (for PDF pages)
         total_pages: Total pages in parent PDF
+        original_filename: Original source filename (before renaming to doc ID)
         
     Returns:
         Created metadata dictionary
@@ -146,7 +148,8 @@ def create_metadata_file(
     # Build metadata
     metadata = get_metadata_schema()
     metadata["document_id"] = document_id
-    metadata["original_filename"] = path.name
+    # Use original_filename if provided, otherwise fall back to path.name
+    metadata["original_filename"] = original_filename if original_filename else path.name
     metadata["stored_filename"] = f"{document_id}{path.suffix}"
     metadata["stored_path"] = str(intake_dir / metadata["stored_filename"])
     metadata["extension"] = path.suffix.lower()
@@ -367,6 +370,7 @@ def split_pdf_to_images(pdf_path: str, max_pages: int = 50) -> Dict[str, Any]:
         child_paths = []
         
         # Create child documents for each page
+        original_pdf_stem = path.stem  # e.g., "my_document" from "my_document.pdf"
         for page_num, image in enumerate(images, start=1):
             child_id = generate_document_id()
             child_filename = f"{child_id}.jpg"
@@ -375,13 +379,14 @@ def split_pdf_to_images(pdf_path: str, max_pages: int = 50) -> Dict[str, Any]:
             # Save image
             image.save(str(child_path), 'JPEG', quality=85)
             
-            # Create child metadata
+            # Create child metadata with original PDF page reference
             create_metadata_file(
                 file_path=str(child_path),
                 document_id=child_id,
                 parent_id=parent_id,
                 page_number=page_num,
-                total_pages=total_pages
+                total_pages=total_pages,
+                original_filename=f"{original_pdf_stem}_page{page_num}.jpg"  # e.g., "my_document_page1.jpg"
             )
             
             child_ids.append(child_id)
@@ -389,9 +394,11 @@ def split_pdf_to_images(pdf_path: str, max_pages: int = 50) -> Dict[str, Any]:
             logger.info(f"Created child document: {child_id} (page {page_num}/{total_pages})")
         
         # Create parent metadata with child references
+        original_pdf_name = path.name  # Original PDF filename
         parent_metadata = create_metadata_file(
             file_path=str(stored_pdf_path),
-            document_id=parent_id
+            document_id=parent_id,
+            original_filename=original_pdf_name  # Preserve original PDF name
         )
         parent_metadata["child_document_ids"] = child_ids
         parent_metadata["total_pages"] = total_pages
@@ -477,12 +484,14 @@ def build_processing_queue(file_paths: List[str]) -> Dict[str, Any]:
             # Queue image directly
             import shutil
             doc_id = generate_document_id()
+            original_name = path.name  # Preserve original filename before renaming
             stored_path = intake_dir / f"{doc_id}{path.suffix}"
             shutil.copy2(str(path), str(stored_path))
             
             create_metadata_file(
                 file_path=str(stored_path),
-                document_id=doc_id
+                document_id=doc_id,
+                original_filename=original_name  # Pass original filename
             )
             queue.append(doc_id)
     

@@ -339,3 +339,280 @@ def update_case_summary_tool(case_id: str, case_summary: Dict[str, Any]) -> Dict
     except Exception as e:
         logger.error(f"Error updating case summary: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
+
+
+# ==================== LLM-BASED CASE SUMMARY ====================
+
+def _collect_all_kyc_data(case_id: str) -> Dict[str, Any]:
+    """
+    Collect all KYC data from documents linked to a case.
+    
+    Returns aggregated data from all documents for LLM summarization.
+    """
+    case_dir = Path(settings.documents_dir) / "cases" / case_id
+    case_metadata_path = case_dir / "case_metadata.json"
+    
+    if not case_metadata_path.exists():
+        return {"error": f"Case {case_id} not found"}
+    
+    with open(case_metadata_path, 'r') as f:
+        case_metadata = json.load(f)
+    
+    document_ids = case_metadata.get('documents', [])
+    
+    all_documents = []
+    
+    for doc_id in document_ids:
+        doc_metadata = _find_document_metadata(doc_id)
+        
+        if not doc_metadata:
+            continue
+        
+        # Skip parent PDF containers
+        if doc_metadata.get('processing_status') == 'split':
+            continue
+        
+        extraction = doc_metadata.get('extraction', {})
+        classification = doc_metadata.get('classification', {})
+        
+        # Get KYC data
+        kyc_data = extraction.get('kyc_data', {})
+        raw_text = extraction.get('raw_text', '')
+        
+        doc_info = {
+            "document_id": doc_id,
+            "document_type": classification.get('document_type', 'unknown'),
+            "kyc_data": kyc_data,
+            "raw_text": raw_text[:2000] if raw_text else ""  # Limit raw text
+        }
+        
+        all_documents.append(doc_info)
+    
+    return {
+        "case_id": case_id,
+        "case_description": case_metadata.get('description', ''),
+        "document_count": len(all_documents),
+        "documents": all_documents
+    }
+
+
+def _summarize_case_with_llm(case_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Use LLM to generate comprehensive case-level KYC summary.
+    
+    Identifies:
+    - Primary entity (company or person)
+    - All persons and companies involved
+    - Entity relationships
+    - KYC verification status
+    """
+    try:
+        from utilities.llm_factory import create_llm
+    except ImportError:
+        logger.warning("LLM factory not available")
+        return {"error": "LLM not available"}
+    
+    # Build document summaries for the prompt
+    doc_summaries = []
+    for doc in case_data.get('documents', []):
+        doc_summary = {
+            "document_id": doc.get('document_id'),
+            "document_type": doc.get('document_type'),
+            "kyc_data": doc.get('kyc_data', {})
+        }
+        doc_summaries.append(doc_summary)
+    
+    prompt = f"""You are a KYC analyst. Analyze the following extracted KYC data from multiple documents and provide a comprehensive case-level summary.
+
+CASE ID: {case_data.get('case_id')}
+CASE DESCRIPTION: {case_data.get('case_description', 'Not provided')}
+
+DOCUMENT DATA:
+{json.dumps(doc_summaries, indent=2)}
+
+INSTRUCTIONS:
+1. Identify the PRIMARY ENTITY for which KYC is being performed:
+   - This is the main company or person whose identity is being verified
+   - Look for company names in bank KYC forms, director details, etc.
+   - If no company is mentioned, the primary entity is a person
+
+2. DISTINGUISH between PRIMARY ENTITY and KYC AGENCIES:
+   - PRIMARY ENTITY: The company/person being verified (e.g., "ABC Pvt Ltd")
+   - KYC AGENCIES: Organizations that ISSUE identity documents, NOT the subject of KYC:
+     * Government bodies: Income Tax Department, UIDAI, Passport Office, RTO, Election Commission, Govt of India, Republic of India, etc.
+     * Banks: Any bank issuing statements (XYZ Bank, SBI, HDFC, etc.)
+     * Utility companies: Electricity boards, telecom companies (Reliance Electric, Airtel, etc.)
+     * Other issuers: Amazon, Flipkart (for delivery address proofs), etc.
+   - Do NOT list KYC agencies as "companies" - put them in "kyc_agencies" array
+
+3. List ALL PERSONS found with their roles
+
+4. Identify RELATIONSHIPS between entities
+
+5. Consolidate KYC data for each entity
+
+6. Identify any MISSING or INCOMPLETE information
+
+Return ONLY a valid JSON object (no markdown):
+
+{{
+  "primary_entity": {{
+    "entity_type": "company" or "person",
+    "name": "Name of primary entity being KYC'd",
+    "description": "Brief description"
+  }},
+  "companies": [
+    {{
+      "name": "Company name (ONLY include primary entity and associated companies, NOT document issuers)",
+      "cin": "CIN if available",
+      "registered_address": "Address",
+      "date_of_incorporation": "Date",
+      "paid_up_capital": "Amount",
+      "gstin": "GST if available",
+      "business_type": "Type of business"
+    }}
+  ],
+  "kyc_agencies": [
+    {{
+      "name": "Agency name (government departments, banks, utilities that ISSUE documents)",
+      "agency_type": "government/bank/utility/other",
+      "documents_issued": ["PAN Card", "Aadhaar", "Bank Statement", "Utility Bill", etc.]
+    }}
+  ],
+  "persons": [
+    {{
+      "name": "Person name",
+      "role": "director/shareholder/account_holder/etc",
+      "associated_company": "Company name if applicable",
+      "pan_number": "PAN",
+      "aadhar_number": "Aadhaar",
+      "date_of_birth": "DOB",
+      "address": "Address",
+      "mobile": "Phone",
+      "email": "Email"
+    }}
+  ],
+  "relationships": [
+    {{
+      "person": "Person name",
+      "relationship": "is Director of / is Shareholder of / is Account Holder of",
+      "entity": "Company or Account name"
+    }}
+  ],
+  "kyc_verification": {{
+    "identity_verified": true/false,
+    "address_verified": true/false,
+    "company_verified": true/false,
+    "missing_documents": ["List of missing document types"],
+    "missing_information": ["List of missing data points"]
+  }},
+  "summary": "Brief narrative summary of the KYC case"
+}}
+
+JSON OUTPUT:"""
+
+    try:
+        llm = create_llm()
+        response = llm.invoke(prompt)
+        
+        # Extract content
+        if hasattr(response, 'content'):
+            response_text = response.content
+        else:
+            response_text = str(response)
+        
+        # Clean up response
+        response_text = response_text.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.startswith("```"):
+            response_text = response_text[3:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
+        response_text = response_text.strip()
+        
+        # Parse JSON
+        result = json.loads(response_text)
+        
+        logger.info(
+            f"LLM case summary: primary={result.get('primary_entity', {}).get('entity_type')}, "
+            f"persons={len(result.get('persons', []))}, companies={len(result.get('companies', []))}"
+        )
+        
+        return result
+        
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse LLM case summary: {e}")
+        return {"error": f"JSON parse error: {str(e)}"}
+        
+    except Exception as e:
+        logger.error(f"LLM case summary failed: {e}")
+        return {"error": str(e)}
+
+
+@tool("generate_comprehensive_case_summary")
+def generate_comprehensive_case_summary_tool(case_id: str) -> Dict[str, Any]:
+    """
+    Generate a comprehensive KYC case summary using LLM.
+    
+    Collects all KYC data from case documents and uses LLM to:
+    - Identify primary entity (company or person)
+    - List all persons and companies
+    - Map entity relationships
+    - Assess KYC verification completeness
+    
+    Args:
+        case_id: Case reference ID (e.g., KYC_2026_001)
+        
+    Returns:
+        Comprehensive case summary with entities and relationships
+    """
+    logger.info(f"Generating comprehensive case summary for {case_id}")
+    
+    try:
+        # Collect all KYC data from documents
+        case_data = _collect_all_kyc_data(case_id)
+        
+        if "error" in case_data:
+            return {"success": False, "error": case_data["error"]}
+        
+        if case_data.get('document_count', 0) == 0:
+            return {
+                "success": False,
+                "error": "No documents found in case"
+            }
+        
+        # Use LLM to summarize
+        llm_summary = _summarize_case_with_llm(case_data)
+        
+        if "error" in llm_summary:
+            return {"success": False, "error": llm_summary["error"]}
+        
+        # Add metadata
+        llm_summary["generated_at"] = datetime.now().isoformat()
+        llm_summary["document_count"] = case_data.get('document_count', 0)
+        llm_summary["case_id"] = case_id
+        
+        # Update case metadata with new summary
+        case_dir = Path(settings.documents_dir) / "cases" / case_id
+        case_metadata_path = case_dir / "case_metadata.json"
+        
+        with open(case_metadata_path, 'r') as f:
+            metadata = json.load(f)
+        
+        metadata['case_summary'] = llm_summary
+        metadata['last_updated'] = datetime.now().isoformat()
+        
+        with open(case_metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        logger.info(f"Comprehensive case summary saved for {case_id}")
+        
+        return {
+            "success": True,
+            "case_summary": llm_summary
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating comprehensive case summary: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}

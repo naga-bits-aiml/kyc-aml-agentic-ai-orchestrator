@@ -261,90 +261,110 @@ def make_vision_api_request(
 
 # ==================== LLM-BASED EXTRACTION ====================
 
-def _get_kyc_field_schema(document_type: str) -> Dict[str, Any]:
+def _get_kyc_extraction_prompt(raw_text: str, document_type: str) -> str:
     """
-    Get the expected KYC field schema for a document type.
+    Build the LLM prompt for KYC data extraction.
     
-    Returns a JSON schema that the LLM should fill with extracted data.
+    Supports extraction of:
+    - Multiple persons (directors, account holders, etc.)
+    - Companies/Organizations
+    - Financial details
     """
-    schemas = {
-        "aadhar": {
-            "full_name": "string - Full name as printed on card",
-            "date_of_birth": "string - Date of birth in DD/MM/YYYY format",
-            "gender": "string - Male/Female",
-            "aadhar_number": "string - 12 digit Aadhar number (XXXX XXXX XXXX)",
-            "address": "string - Complete address if visible",
-            "vid_number": "string - Virtual ID if present"
-        },
-        "pan": {
-            "full_name": "string - Full name as printed on card",
-            "date_of_birth": "string - Date of birth in DD/MM/YYYY format",
-            "pan_number": "string - 10 character PAN (e.g., ABCDE1234F)",
-            "father_name": "string - Father's name if present"
-        },
-        "driving": {
-            "full_name": "string - Full name as printed on license",
-            "date_of_birth": "string - Date of birth in DD/MM/YYYY format",
-            "license_number": "string - Driving license number",
-            "issue_date": "string - Date of issue in DD/MM/YYYY format",
-            "expiry_date": "string - Validity/expiry date in DD/MM/YYYY format",
-            "address": "string - Address if visible",
-            "blood_group": "string - Blood group if present",
-            "vehicle_class": "string - Class of vehicle (LMV, MCWG, etc.)"
-        },
-        "passport": {
-            "full_name": "string - Full name as in passport",
-            "date_of_birth": "string - Date of birth in DD/MM/YYYY format",
-            "passport_number": "string - Passport number (letter + 7 digits)",
-            "nationality": "string - Nationality",
-            "place_of_birth": "string - Place of birth",
-            "issue_date": "string - Date of issue",
-            "expiry_date": "string - Date of expiry",
-            "place_of_issue": "string - Place of issue",
-            "gender": "string - Male/Female",
-            "address": "string - Address if present"
-        },
-        "voter": {
-            "full_name": "string - Full name (elector's name)",
-            "date_of_birth": "string - Date of birth or age",
-            "voter_id_number": "string - EPIC number (3 letters + 7 digits)",
-            "father_name": "string - Father's/Husband's name",
-            "gender": "string - Male/Female",
-            "address": "string - Address",
-            "constituency": "string - Assembly/Parliamentary constituency"
-        }
-    }
+    prompt = f"""You are a KYC document data extraction specialist. Extract ALL entities and their details from the following OCR text.
+
+OCR TEXT:
+---
+{raw_text}
+---
+
+DOCUMENT TYPE: {document_type}
+
+INSTRUCTIONS:
+1. Extract ALL persons mentioned (directors, account holders, signatories, etc.)
+2. Extract ALL companies/organizations mentioned
+3. Extract financial details if present (bank accounts, balances, etc.)
+4. Return a JSON array of entities
+
+ENTITY TYPES:
+- "person": Individual with name, DOB, ID numbers, address
+- "company": Business entity with name, CIN, address, incorporation date
+- "financial": Bank/financial account details
+
+REQUIRED OUTPUT FORMAT - Return ONLY a valid JSON array (no markdown, no explanation):
+
+[
+  {{
+    "entity_type": "person",
+    "role": "director/account_holder/signatory/etc",
+    "full_name": "Name as in document",
+    "father_name": "Father's name or null",
+    "date_of_birth": "DD/MM/YYYY or null",
+    "pan_reference": "10 char PAN or null",
+    "aadhar_reference": "12 digit Aadhaar or null",
+    "passport_reference": "Passport number or null",
+    "voter_reference": "Voter ID or null",
+    "driving_reference": "DL number or null",
+    "other_id_reference": "Other ID number or null",
+    "address": "Full address or null",
+    "mobile": "Phone number or null",
+    "email": "Email or null"
+  }},
+  {{
+    "entity_type": "company",
+    "company_name": "Full legal name",
+    "cin_reference": "Corporate Identification Number or null",
+    "other_id_reference": "Other ID number or null",
+    "date_of_incorporation": "DD/MM/YYYY or null",
+    "registered_address": "Registered office address or null",
+    "paid_up_capital": "Amount or null",
+    "gstin": "GST number or null",
+    "business_type": "Type of business or null"
+  }},
+  {{
+    "entity_type": "financial",
+    "account_holder": "Name of account holder (person or company)",
+    "bank_name": "Bank name or null",
+    "account_number": "Account number or null",
+    "ifsc_code": "IFSC code or null",
+    "account_type": "savings/current/etc or null",
+    "balance": "Balance amount if shown or null",
+    "statement_date": "Date of statement or null"
+  }}
+]
+
+RULES:
+1. Extract exact values as they appear
+2. Use DD/MM/YYYY for dates
+3. Use Title Case for names
+4. Remove spaces from ID numbers (PAN, Aadhaar)
+5. Use null for missing fields (not empty string)
+6. Include ALL persons found, even if same details repeat
+7. Return ONLY the JSON array, nothing else
+
+
+JSON OUTPUT:"""
     
-    # Normalize document type
-    doc_type_lower = document_type.lower().replace(" ", "_").replace("-", "_")
-    
-    # Find matching schema
-    for key in schemas:
-        if key in doc_type_lower or doc_type_lower in key:
-            return schemas[key]
-    
-    # Default generic schema
-    return {
-        "full_name": "string - Full name",
-        "date_of_birth": "string - Date of birth",
-        "document_number": "string - Primary document ID/number",
-        "address": "string - Address if present"
-    }
+    return prompt
 
 
 def _extract_with_llm(raw_text: str, document_type: str) -> Dict[str, Any]:
     """
     Use LLM to extract structured KYC data from OCR text.
     
-    Passes the OCR text to an LLM with a specific JSON schema
-    to extract and normalize KYC-relevant fields.
+    Extracts multiple entities (persons, companies, financial accounts)
+    and returns them as a structured array.
     
     Args:
         raw_text: Raw OCR text from Vision API
         document_type: Classified document type
         
     Returns:
-        Dictionary with extracted KYC fields
+        Dictionary with:
+        - entities: List of extracted entities
+        - persons: List of person entities (convenience)
+        - companies: List of company entities (convenience)
+        - financial: List of financial entities (convenience)
+        - primary_entity: First/main entity for backward compatibility
     """
     try:
         from utilities.llm_factory import create_llm
@@ -352,31 +372,8 @@ def _extract_with_llm(raw_text: str, document_type: str) -> Dict[str, Any]:
         logger.warning("LLM factory not available, falling back to regex extraction")
         return _parse_fields_from_text(raw_text, document_type)
     
-    # Get expected schema for this document type
-    field_schema = _get_kyc_field_schema(document_type)
-    
     # Build the extraction prompt
-    prompt = f"""You are a KYC document data extraction specialist. Extract structured information from the following OCR text of a {document_type} document.
-
-OCR TEXT:
----
-{raw_text}
----
-
-REQUIRED OUTPUT FORMAT:
-Extract the following fields and return ONLY a valid JSON object (no markdown, no explanation):
-
-{json.dumps(field_schema, indent=2)}
-
-INSTRUCTIONS:
-1. Extract exact values as they appear in the document
-2. For dates, use DD/MM/YYYY format
-3. For names, use proper capitalization (Title Case)
-4. If a field is not found or unclear, use null
-5. For document numbers, remove spaces and normalize format
-6. Return ONLY the JSON object, nothing else
-
-JSON OUTPUT:"""
+    prompt = _get_kyc_extraction_prompt(raw_text, document_type)
 
     try:
         llm = create_llm()
@@ -398,15 +395,59 @@ JSON OUTPUT:"""
             response_text = response_text[:-3]
         response_text = response_text.strip()
         
-        # Parse JSON
-        extracted_data = json.loads(response_text)
+        # Parse JSON array
+        entities = json.loads(response_text)
         
-        # Clean null values and empty strings
-        cleaned_data = {k: v for k, v in extracted_data.items() if v is not None and v != "" and v != "null"}
+        # Ensure it's a list
+        if not isinstance(entities, list):
+            entities = [entities]
         
-        logger.info(f"LLM extracted {len(cleaned_data)} fields from {document_type}")
+        # Clean null values from each entity
+        cleaned_entities = []
+        for entity in entities:
+            cleaned = {k: v for k, v in entity.items() if v is not None and v != "" and v != "null"}
+            if cleaned.get('entity_type'):  # Only include if has entity type
+                cleaned_entities.append(cleaned)
         
-        return cleaned_data
+        # Categorize entities for convenience
+        persons = [e for e in cleaned_entities if e.get('entity_type') == 'person']
+        companies = [e for e in cleaned_entities if e.get('entity_type') == 'company']
+        financial = [e for e in cleaned_entities if e.get('entity_type') == 'financial']
+        
+        # Create primary entity for backward compatibility
+        primary_entity = {}
+        if persons:
+            p = persons[0]
+            primary_entity = {
+                "full_name": p.get("full_name"),
+                "date_of_birth": p.get("date_of_birth"),
+                "pan_number": p.get("pan_number"),
+                "aadhar_number": p.get("aadhar_number"),
+                "address": p.get("address")
+            }
+            primary_entity = {k: v for k, v in primary_entity.items() if v}
+        elif companies:
+            c = companies[0]
+            primary_entity = {
+                "company_name": c.get("company_name"),
+                "cin": c.get("cin"),
+                "registered_address": c.get("registered_address")
+            }
+            primary_entity = {k: v for k, v in primary_entity.items() if v}
+        
+        logger.info(
+            f"LLM extracted {len(cleaned_entities)} entities: "
+            f"{len(persons)} persons, {len(companies)} companies, {len(financial)} financial"
+        )
+        
+        return {
+            "entities": cleaned_entities,
+            "persons": persons,
+            "companies": companies,
+            "financial": financial,
+            "entity_count": len(cleaned_entities),
+            **primary_entity  # Backward compatibility - flatten primary entity
+        }
         
     except json.JSONDecodeError as e:
         logger.warning(f"Failed to parse LLM response as JSON: {e}")
@@ -610,32 +651,31 @@ def extract_document_data(document_id: str, document_type: Optional[str] = None)
         word_count = result.get("word_count", 0)
         char_count = result.get("char_count", 0)
         
-        # Build base extracted fields
-        extracted_fields = {
-            "raw_text": raw_text,
-            "word_count": word_count,
-            "char_count": char_count
-        }
-        
         # Use LLM to extract structured KYC fields from OCR text
+        kyc_data = {}
         if document_type and raw_text:
             logger.info(f"Extracting KYC fields using LLM for {document_type}...")
-            llm_fields = _extract_with_llm(raw_text, document_type)
-            extracted_fields["kyc_data"] = llm_fields
-            # Also merge key fields to top level for easy access
-            extracted_fields.update(llm_fields)
+            kyc_data = _extract_with_llm(raw_text, document_type)
         
         # Log extraction result
-        kyc_field_count = len(extracted_fields.get("kyc_data", {}))
+        entity_count = kyc_data.get("entity_count", 0)
         logger.info(
             f"Extraction successful for {document_id}: "
-            f"{word_count} words, {kyc_field_count} KYC fields extracted"
+            f"{word_count} words, {entity_count} entities extracted"
         )
         
+        # Store raw Vision API response in separate file to keep metadata lean
+        raw_response = result.get("raw_response", {})
+        if raw_response:
+            raw_response_path = intake_dir / f"{document_id}.vision_response.json"
+            with open(raw_response_path, 'w') as f:
+                json.dump(raw_response, f, indent=2)
+            logger.debug(f"Stored Vision API response: {raw_response_path}")
+        
+        # Update metadata with essential data only (no raw API response, no duplication)
         metadata["extraction"]["status"] = "completed"
-        metadata["extraction"]["result"] = result.get("raw_response", {})
-        metadata["extraction"]["extracted_fields"] = extracted_fields
-        metadata["extraction"]["kyc_data"] = extracted_fields.get("kyc_data", {})
+        metadata["extraction"]["vision_response_file"] = f"{document_id}.vision_response.json"
+        metadata["extraction"]["kyc_data"] = kyc_data
         metadata["extraction"]["confidence"] = confidence
         metadata["extraction"]["raw_text"] = raw_text
         metadata["extraction"]["word_count"] = word_count
@@ -651,8 +691,7 @@ def extract_document_data(document_id: str, document_type: Optional[str] = None)
             "success": True,
             "document_id": document_id,
             "document_type": document_type,
-            "kyc_data": extracted_fields.get("kyc_data", {}),
-            "extracted_fields": extracted_fields,
+            "kyc_data": kyc_data,
             "confidence": confidence,
             "raw_text": raw_text,
             "word_count": word_count,
@@ -709,10 +748,45 @@ def get_extraction_result(document_id: str) -> Dict[str, Any]:
         "document_id": document_id,
         "status": extraction.get("status", "pending"),
         "extracted_fields": extraction.get("extracted_fields", {}),
-        "result": extraction.get("result"),
+        "kyc_data": extraction.get("kyc_data", {}),
+        "vision_response_file": extraction.get("vision_response_file"),
         "error": extraction.get("error"),
         "started_at": extraction.get("started_at"),
         "completed_at": extraction.get("completed_at")
+    }
+
+
+@tool
+def get_vision_api_response(document_id: str) -> Dict[str, Any]:
+    """
+    Get the raw Vision API response for a document.
+    
+    The raw response is stored separately to keep metadata files small.
+    Use this tool when you need bounding boxes or character-level details.
+    
+    Args:
+        document_id: Document ID to get Vision response for
+        
+    Returns:
+        Dictionary with Vision API response or error
+    """
+    intake_dir = Path(settings.documents_dir) / "intake"
+    response_path = intake_dir / f"{document_id}.vision_response.json"
+    
+    if not response_path.exists():
+        return {
+            "success": False,
+            "document_id": document_id,
+            "error": f"Vision response not found: {response_path.name}"
+        }
+    
+    with open(response_path, 'r') as f:
+        response = json.load(f)
+    
+    return {
+        "success": True,
+        "document_id": document_id,
+        "response": response
     }
 
 
