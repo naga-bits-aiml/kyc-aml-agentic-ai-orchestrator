@@ -63,7 +63,7 @@ def list_openai_models():
 def list_google_models():
     """List all available Google Gemini models."""
     try:
-        import google.generativeai as genai
+        from google import genai
         
         api_key = config.get('llm.google.api_key')
         if not api_key:
@@ -71,27 +71,24 @@ def list_google_models():
             print("   Set GOOGLE_API_KEY in .env file to see Google models\n")
             return False
         
-        genai.configure(api_key=api_key)
+        client = genai.Client(api_key=api_key)
         
         print("\n" + "="*70)
         print("📋 Available Google Gemini Models")
         print("="*70 + "\n")
         
-        models = genai.list_models()
+        models = client.models.list()
         
         # Categorize models
         chat_models = []
         embedding_models = []
-        other_models = []
         
         for model in models:
             name = model.name.replace('models/', '')
-            if 'generateContent' in model.supported_generation_methods:
+            if 'gemini' in name.lower():
                 chat_models.append(name)
-            elif 'embedContent' in model.supported_generation_methods:
+            elif 'embed' in name.lower():
                 embedding_models.append(name)
-            else:
-                other_models.append(name)
         
         print("💬 Chat/Generation Models:")
         print("-" * 70)
@@ -104,31 +101,22 @@ def list_google_models():
             for model in sorted(embedding_models):
                 print(f"  • {model}")
         
-        if other_models:
-            print(f"\n📊 Other Models:")
-            print("-" * 70)
-            for model in sorted(other_models):
-                print(f"  • {model}")
-        
         print("\n" + "="*70)
         print("💡 Recommended Google Gemini models for KYC-AML:")
         print("="*70)
-        print("  • gemini-1.5-flash          - Fast, cost-effective (FREE tier!)")
-        print("  • gemini-1.5-pro            - Most capable")
-        print("  • gemini-pro                - Balanced performance")
+        print("  • gemini-2.5-flash          - Fast, cost-effective (FREE tier!)")
+        print("  • gemini-2.5-pro            - Most capable")
+        print("  • gemini-1.5-flash          - Balanced performance")
         print("\n💰 Pricing:")
-        print("  • Gemini 1.5 Flash: FREE for 2M tokens/day")
+        print("  • Gemini 2.5 Flash: FREE for 2M tokens/day")
         print("  • With Google Cloud: $300 free credit")
-        print("\n⚠️  Note: Use model names WITHOUT '-latest' suffix")
-        print("  ✅ Correct: gemini-1.5-flash")
-        print("  ❌ Wrong:   gemini-1.5-flash-latest")
         print("="*70 + "\n")
         
         return True
         
     except ImportError:
-        print("\n⚠️  Google Generative AI package not installed")
-        print("   Run: pip install google-generativeai\n")
+        print("\n⚠️  Google Gen AI package not installed")
+        print("   Run: pip install google-genai\n")
         return False
     except Exception as e:
         print(f"\n❌ Error listing Google models: {str(e)}")

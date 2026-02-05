@@ -10,9 +10,13 @@ from utilities import config, logger
 # Try to import Google Genai if available
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
+    from google.ai.generativelanguage_v1beta.types.safety import HarmCategory, SafetySetting
+    HarmBlockThreshold = SafetySetting.HarmBlockThreshold
     HAS_GOOGLE_GENAI = True
 except ImportError:
     HAS_GOOGLE_GENAI = False
+    HarmCategory = None
+    HarmBlockThreshold = None
 
 
 def create_llm(
@@ -42,10 +46,10 @@ def create_llm(
         # Disable safety filters for KYC/AML document processing
         # These documents contain regulated PII/financial data that should not be blocked
         safety_settings = {
-            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
-            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
-            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
-            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         }
         
         resolved_model = model or config.google_model

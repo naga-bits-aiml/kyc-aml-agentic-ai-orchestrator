@@ -1,5 +1,5 @@
 """Quick test to find the correct Google Gemini model name."""
-import google.generativeai as genai
+from google import genai
 import os
 from dotenv import load_dotenv
 
@@ -10,7 +10,7 @@ if not api_key:
     print("❌ GOOGLE_API_KEY not set in .env")
     exit(1)
 
-genai.configure(api_key=api_key)
+client = genai.Client(api_key=api_key)
 
 print("\n" + "="*70)
 print("🔍 Finding Available Google Gemini Models")
@@ -19,11 +19,10 @@ print("="*70 + "\n")
 print("Models that support generateContent (chat):\n")
 
 chat_models = []
-for model in genai.list_models():
-    if 'generateContent' in model.supported_generation_methods:
-        model_name = model.name.replace('models/', '')
-        chat_models.append(model_name)
-        print(f"  ✓ {model_name}")
+for model in client.models.list():
+    model_name = model.name.replace('models/', '')
+    chat_models.append(model_name)
+    print(f"  ✓ {model_name}")
 
 print("\n" + "="*70)
 print("Testing first available model...")
@@ -34,8 +33,10 @@ if chat_models:
     print(f"Testing: {test_model}")
     
     try:
-        model = genai.GenerativeModel(test_model)
-        response = model.generate_content("Say hello")
+        response = client.models.generate_content(
+            model=test_model,
+            contents="Say hello"
+        )
         print(f"\n✅ SUCCESS! Model '{test_model}' works!")
         print(f"Response: {response.text[:100]}...")
         
