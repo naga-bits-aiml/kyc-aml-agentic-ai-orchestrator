@@ -11,10 +11,9 @@ This module defines the CrewAI crew with 5 specialized agents:
 Each agent uses deterministic tools for file operations and REST calls.
 """
 
-from crewai import Agent, Crew, Process, Task
+from crewai import Agent, Crew, Process, Task, LLM
 from crewai.project import CrewBase, agent, crew, task
-from typing import Optional, Dict, Any
-from langchain.llms.base import BaseLLM
+from typing import Optional, Dict, Any, Union
 
 # Import tools
 from tools.queue_tools import (
@@ -71,17 +70,33 @@ class DocumentProcessingCrew:
     agents_config = 'config/pipeline_agents.yaml'
     tasks_config = 'config/pipeline_tasks.yaml'
     
-    def __init__(self, llm: Optional[BaseLLM] = None):
+    def __init__(self, llm: Optional[Union[LLM, str]] = None):
         """
         Initialize the crew with LLM.
         
         Args:
-            llm: Language model instance (optional, defaults to configured model)
+            llm: CrewAI LLM instance or model string (optional, defaults to configured model)
         """
-        self.llm = llm
-        if self.llm is None:
-            from utilities.llm_factory import create_llm
-            self.llm = create_llm()
+        if llm is None:
+            # Create CrewAI LLM from config
+            from utilities import config
+            llm_config = config.get("llm", {})
+            provider = llm_config.get("provider", "google")
+            model_name = llm_config.get("model_name", "gemini-2.5-flash")
+            
+            # CrewAI uses format like "gemini/gemini-2.5-flash" or "openai/gpt-4"
+            if provider == "google":
+                model_str = f"gemini/{model_name}"
+            elif provider == "openai":
+                model_str = f"openai/{model_name}"
+            else:
+                model_str = f"{provider}/{model_name}"
+            
+            self.llm = LLM(model=model_str)
+        elif isinstance(llm, str):
+            self.llm = LLM(model=llm)
+        else:
+            self.llm = llm
     
     # ==================== AGENT DEFINITIONS ====================
     
@@ -329,12 +344,12 @@ class DocumentProcessingCrew:
 
 # ==================== CONVENIENCE FUNCTIONS ====================
 
-def create_pipeline_crew(llm: Optional[BaseLLM] = None) -> DocumentProcessingCrew:
+def create_pipeline_crew(llm: Optional[Union[LLM, str]] = None) -> DocumentProcessingCrew:
     """
     Create a new document processing crew.
     
     Args:
-        llm: Optional language model instance
+        llm: Optional CrewAI LLM instance or model string
         
     Returns:
         Configured DocumentProcessingCrew instance
@@ -342,13 +357,13 @@ def create_pipeline_crew(llm: Optional[BaseLLM] = None) -> DocumentProcessingCre
     return DocumentProcessingCrew(llm=llm)
 
 
-def run_queue_build(input_path: str, llm: Optional[BaseLLM] = None) -> Dict[str, Any]:
+def run_queue_build(input_path: str, llm: Optional[Union[LLM, str]] = None) -> Dict[str, Any]:
     """
     Run queue building for an input path.
     
     Args:
         input_path: File or folder path
-        llm: Optional language model instance
+        llm: Optional CrewAI LLM instance or model string
         
     Returns:
         Queue building result
@@ -358,13 +373,13 @@ def run_queue_build(input_path: str, llm: Optional[BaseLLM] = None) -> Dict[str,
     return result
 
 
-def run_classification(document_id: str, llm: Optional[BaseLLM] = None) -> Dict[str, Any]:
+def run_classification(document_id: str, llm: Optional[Union[LLM, str]] = None) -> Dict[str, Any]:
     """
     Run classification for a document.
     
     Args:
         document_id: Document ID to classify
-        llm: Optional language model instance
+        llm: Optional CrewAI LLM instance or model string
         
     Returns:
         Classification result
@@ -374,14 +389,14 @@ def run_classification(document_id: str, llm: Optional[BaseLLM] = None) -> Dict[
     return result
 
 
-def run_extraction(document_id: str, document_type: str = None, llm: Optional[BaseLLM] = None) -> Dict[str, Any]:
+def run_extraction(document_id: str, document_type: str = None, llm: Optional[Union[LLM, str]] = None) -> Dict[str, Any]:
     """
     Run extraction for a document.
     
     Args:
         document_id: Document ID to extract
         document_type: Optional document type from classification
-        llm: Optional language model instance
+        llm: Optional CrewAI LLM instance or model string
         
     Returns:
         Extraction result
@@ -394,12 +409,12 @@ def run_extraction(document_id: str, document_type: str = None, llm: Optional[Ba
     return result
 
 
-def run_summary(llm: Optional[BaseLLM] = None) -> Dict[str, Any]:
+def run_summary(llm: Optional[Union[LLM, str]] = None) -> Dict[str, Any]:
     """
     Run summary generation.
     
     Args:
-        llm: Optional language model instance
+        llm: Optional CrewAI LLM instance or model string
         
     Returns:
         Processing summary

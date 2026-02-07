@@ -146,6 +146,64 @@ def get_document_metadata_tool(file_path: str) -> Dict[str, Any]:
         }
 
 
+@tool("Get Document By ID")
+def get_document_by_id_tool(document_id: str) -> Dict[str, Any]:
+    """
+    Retrieve document metadata by document ID.
+    
+    This tool looks up a document using its unique ID (e.g., DOC_20260207_130709_4FA11)
+    and returns all stored metadata including classification and extraction results.
+    
+    Args:
+        document_id: The document ID (e.g., 'DOC_20260207_130709_4FA11')
+        
+    Returns:
+        Dictionary with document metadata including:
+        - success: Boolean indicating if document was found
+        - document_id: The document ID
+        - original_filename: Original file name
+        - classification: Classification results (type, confidence)
+        - extraction: Extracted data (entities, persons, etc.)
+        - linked_cases: Cases this document is linked to
+        - status: Processing status
+    """
+    logger.info(f"Getting document by ID: {document_id}")
+    
+    try:
+        # Documents are stored in intake folder with {doc_id}.metadata.json
+        intake_dir = Path(config.documents_dir) / "intake"
+        metadata_file = intake_dir / f"{document_id}.metadata.json"
+        
+        if not metadata_file.exists():
+            return {
+                "success": False,
+                "error": f"Document {document_id} not found in intake folder"
+            }
+        
+        with open(metadata_file, 'r') as f:
+            metadata = json.load(f)
+        
+        return {
+            "success": True,
+            "document_id": document_id,
+            "original_filename": metadata.get('original_filename', 'unknown'),
+            "source_path": metadata.get('source_path', ''),
+            "status": metadata.get('status', 'unknown'),
+            "linked_cases": metadata.get('linked_cases', []),
+            "classification": metadata.get('classification', {}),
+            "extraction": metadata.get('extraction', {}),
+            "queue": metadata.get('queue', {}),
+            "intake_date": metadata.get('intake_date', ''),
+            "metadata": metadata  # Full metadata for detailed access
+        }
+    except Exception as e:
+        logger.error(f"Failed to get document by ID: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
 @tool("List Documents")
 def list_documents_tool(directory: str = None, extension: str = None) -> Dict[str, Any]:
     """

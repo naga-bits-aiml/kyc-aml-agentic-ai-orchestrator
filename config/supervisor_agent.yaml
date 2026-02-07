@@ -1,0 +1,187 @@
+# Supervisor Agent Configuration
+# 
+# The Supervisor Agent orchestrates multi-step user commands using
+# the Plan-and-Execute pattern. It parses complex requests, creates
+# execution plans, and delegates work to specialized agents.
+#
+# This is separate from pipeline_agents.yaml because:
+# 1. Supervisor has unique config (planning_prompt, action mappings)
+# 2. It's the orchestrator, not a worker agent
+# 3. Will likely grow with retry policies, action mappings, etc.
+
+agent:
+  role: >
+    Orchestration Supervisor
+  goal: >
+    Interpret user commands, break them into atomic execution steps, and 
+    orchestrate the appropriate agents to complete multi-step workflows.
+    Ensure proper sequencing, dependency management, and consolidated reporting.
+  backstory: >
+    You are the master orchestrator responsible for understanding complex user 
+    requests and delegating work to specialized agents. When a user provides 
+    a multi-step command like "Create case KYC_001, process documents from 
+    ~/Downloads, and summarize the results", you break it into atomic steps:
+    
+    1. Create/switch to case KYC_001
+    2. Process documents from the folder
+    3. Generate case summary
+    
+    You understand dependencies between steps - summarization must wait for 
+    document processing, and processing should happen after the case is created.
+    
+    Your planning process:
+    - Parse user intent into discrete actions
+    - Identify dependencies between actions
+    - Create an execution plan with proper ordering
+    - Execute each step and track progress
+    - Handle failures gracefully (skip dependent steps if a step fails)
+    - Provide consolidated results to the user
+    
+    Available actions you can orchestrate:
+    - create_case: Create or switch to a KYC/AML case
+    - process_folder: Process all documents in a directory
+    - process_documents: Process specific document files
+    - classify: Classify documents
+    - extract: Extract data from documents
+    - summarize: Generate case or processing summary
+    - list_cases: List all available cases
+    - list_documents: List documents (optionally filtered)
+    - get_status: Get system or case status
+    
+    You always show the execution plan before running, so users understand 
+    what will happen. You report progress after each step completes.
+
+# Prompt template for LLM-based command parsing
+planning_prompt: >
+  Analyze this user command and extract the sequence of actions needed.
+  
+  User command: "{user_input}"
+  Current case: {current_case}
+  
+  Available actions:
+  - create_case: Create or switch to a case. Args: {{"case_reference": "..."}}
+  - switch_case: Switch to existing case. Args: {{"case_reference": "..."}}
+  - process_folder: Process all documents in a folder. Args: {{"folder_path": "..."}}
+  - process_documents: Process specific documents. Args: {{"file_paths": ["..."]}}
+  - summarize: Generate case summary. Args: {{"case_reference": "..."}}
+  - list_cases: List all cases. Args: {{}}
+  - list_documents: List documents. Args: {{"case_reference": "..." or null}}
+  - get_status: Get system/case status. Args: {{}}
+  
+  Return a JSON array of actions in execution order. Each action should have:
+  - "action": action name from the list above
+  - "args": dictionary of arguments
+  - "depends_on": step number this depends on (optional)
+  
+  Example for "Create case KYC_001, process ~/docs, and summarize":
+  [
+    {{"action": "create_case", "args": {{"case_reference": "KYC_001"}}}},
+    {{"action": "process_folder", "args": {{"folder_path": "~/docs"}}, "depends_on": 1}},
+    {{"action": "summarize", "args": {{"case_reference": "KYC_001"}}, "depends_on": 2}}
+  ]
+  
+  Return ONLY the JSON array, no other text.
+
+# Action type mappings - maps actions to crews/agents
+actions:
+  create_case:
+    description: Create or switch to a KYC/AML case
+    requires_case: false
+    handler: direct  # Handled directly by supervisor (no crew needed)
+  switch_case:
+    description: Switch to an existing case
+    requires_case: false
+    handler: direct
+  process_folder:
+    description: Process all documents in a directory
+    requires_case: true
+    handler: flow  # Uses DocumentProcessingFlow
+    crew: full_pipeline_crew
+  process_documents:
+    description: Process specific document files
+    requires_case: true
+    handler: flow
+    crew: full_pipeline_crew
+  classify:
+    description: Classify documents by type
+    requires_case: true
+    handler: crew
+    crew: classification_crew
+    agent: classification_agent
+  extract:
+    description: Extract data from documents
+    requires_case: true
+    handler: crew
+    crew: extraction_crew
+    agent: extraction_agent
+  summarize:
+    description: Generate case or processing summary
+    requires_case: true
+    handler: direct  # Uses case-aware summary (not global summary_crew)
+    crew: summary_crew
+    agent: summary_agent
+  list_cases:
+    description: List all available cases
+    requires_case: false
+    handler: direct
+  list_documents:
+    description: List documents (optionally filtered)
+    requires_case: false
+    handler: direct  # Uses direct metadata lookup
+  get_status:
+    description: Get system or case status
+    requires_case: false
+    handler: direct
+  link_document:
+    description: Link a document to a case
+    requires_case: true
+    handler: direct
+
+# Available crews from pipeline_crew.py
+crews:
+  queue_crew:
+    description: Builds the initial document processing queue
+    agents: [queue_agent]
+    tasks: [build_queue_task]
+  classification_crew:
+    description: Classifies documents using external API
+    agents: [classification_agent, metadata_agent]
+    tasks: [classify_document_task]
+  extraction_crew:
+    description: Extracts data from documents using external API
+    agents: [extraction_agent, metadata_agent]
+    tasks: [extract_document_task]
+  summary_crew:
+    description: Generates final processing summary
+    agents: [summary_agent]
+    tasks: [generate_summary_task]
+  full_pipeline_crew:
+    description: Full end-to-end document processing
+    agents: [queue_agent, classification_agent, extraction_agent, metadata_agent, summary_agent]
+    tasks: [build_queue_task, classify_document_task, extract_document_task, generate_summary_task]
+
+# Available agents - what they do (not how)
+# Tools are internal implementation details of each agent
+agents:
+  queue_agent:
+    description: Builds and manages the document processing queue
+    capabilities: [scan_paths, expand_folders, split_pdfs, build_queue, manage_queue]
+  classification_agent:
+    description: Classifies documents by type using external API
+    capabilities: [classify_single, classify_batch, get_classification]
+  extraction_agent:
+    description: Extracts structured data from documents using external API
+    capabilities: [extract_data, extract_batch, get_expected_fields]
+  metadata_agent:
+    description: Tracks document status, handles errors, and manages retries
+    capabilities: [track_status, record_errors, manage_retries, flag_for_review]
+  summary_agent:
+    description: Generates processing summaries and reports
+    capabilities: [generate_summary, create_report, export_results]
+
+# Execution settings
+execution:
+  max_retries: 2
+  continue_on_error: false
+  show_plan_before_execute: true
+  verbose_progress: true

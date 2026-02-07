@@ -1,15 +1,23 @@
 """
 Chat interface tools for LLM tool calling.
 These tools enable the LLM to interact with the KYC-AML system via pipeline agents.
+
+NOTE: These tools use LangChain's @tool decorator (not CrewAI's) because they are
+used with LangChain's .bind_tools() in the chat interface, not with CrewAI agents.
 """
 from pathlib import Path
 from typing import Optional, Dict, Any
 import json
 import shutil
 from datetime import datetime
-from langchain_core.tools import tool
+from langchain_core.tools import tool  # LangChain tool for bind_tools() compatibility
 from utilities import settings, logger
 from case_metadata_manager import StagedCaseMetadataManager
+
+
+def fmt_id(doc_id: str) -> str:
+    """Format document/case ID for Markdown display using backticks to prevent underscore escaping."""
+    return f"`{doc_id}`" if doc_id else "unknown"
 
 
 def create_chat_tools(chat_interface):
@@ -176,32 +184,73 @@ def create_chat_tools(chat_interface):
     
     @tool
     def get_case_details(case_reference: str) -> str:
-        """Get detailed information about a specific case.
+        """Get detailed information about a specific case including linked documents.
         
         Args:
             case_reference: The case reference ID (e.g., KYC-2024-001)
             
         Returns:
-            Detailed case information including document list.
+            Detailed case information including linked documents with their types.
         """
         case_dir = Path(settings.documents_dir) / "cases" / case_reference
         
         if not case_dir.exists():
             return f"❌ Case {case_reference} not found."
         
-        documents = list(case_dir.glob("*.*"))
+        # Load case metadata to get linked documents
+        metadata_file = case_dir / "case_metadata.json"
+        if not metadata_file.exists():
+            return f"❌ Case metadata not found for {case_reference}."
         
-        msg = f"\n📁 Case: {case_reference}\n\n"
-        msg += f"  • Location: {case_dir}\n"
-        msg += f"  • Documents: {len(documents)}\n\n"
+        with open(metadata_file, 'r') as f:
+            case_meta = json.load(f)
         
-        if documents:
-            msg += "  Documents:\n"
-            for doc in sorted(documents):
-                size_kb = doc.stat().st_size / 1024
-                msg += f"    - {doc.name} ({size_kb:.1f} KB)\n"
+        document_ids = case_meta.get('documents', [])
+        created = case_meta.get('created_date', 'N/A')[:10]
+        status = case_meta.get('status', 'unknown')
+        workflow = case_meta.get('workflow_stage', 'unknown')
+        
+        msg = f"\n📁 Case: {fmt_id(case_reference)}\n\n"
+        msg += f"  📅 Created: {created}\n"
+        msg += f"  🏷️  Status: {status}\n"
+        msg += f"  🔄 Workflow: {workflow.replace('_', ' ').title()}\n"
+        msg += f"  📄 Documents: {len(document_ids)}\n\n"
+        
+        if document_ids:
+            msg += "  **Linked Documents:**\n"
+            intake_dir = Path(settings.documents_dir) / "intake"
+            
+            for doc_id in document_ids:
+                # Get document metadata from intake
+                doc_meta_file = intake_dir / f"{doc_id}.metadata.json"
+                if doc_meta_file.exists():
+                    try:
+                        with open(doc_meta_file, 'r') as f:
+                            doc_meta = json.load(f)
+                        doc_type = doc_meta.get('classification', {}).get('document_type', 'unclassified')
+                        conf = doc_meta.get('classification', {}).get('confidence', 0)
+                        msg += f"    - {fmt_id(doc_id)}: {doc_type.upper()} ({conf:.0%})\n"
+                    except:
+                        msg += f"    - {fmt_id(doc_id)}: (metadata error)\n"
+                else:
+                    msg += f"    - {fmt_id(doc_id)}: (no metadata)\n"
         else:
-            msg += "  No documents in this case yet.\n"
+            msg += "  No documents linked to this case yet.\n"
+        
+        # Show case summary if available
+        case_summary = case_meta.get('case_summary', {})
+        if case_summary:
+            primary = case_summary.get('primary_entity', {})
+            if primary:
+                msg += f"\n  **Primary Entity:** {primary.get('name', 'Unknown')} ({primary.get('entity_type', 'unknown')})\n"
+            
+            persons = case_summary.get('persons', [])
+            if persons:
+                msg += f"\n  **Identified Persons:** {len(persons)}\n"
+                for person in persons[:3]:
+                    msg += f"    - {person.get('name', 'Unknown')}\n"
+                if len(persons) > 3:
+                    msg += f"    ... and {len(persons) - 3} more\n"
         
         return msg
     
@@ -235,13 +284,13 @@ def create_chat_tools(chat_interface):
         case_metadata = metadata_manager.load_metadata()
         
         # Build comprehensive status report
-        msg = f"\n📊 Case Status: {case_ref}\n"
+        msg = f"\n📊 **Case Summary: {fmt_id(case_ref)}**\n"
         msg += "=" * 60 + "\n\n"
         
         # Workflow stage
         workflow_stage = case_metadata.get('workflow_stage', 'unknown')
         status = case_metadata.get('status', 'unknown')
-        created = case_metadata.get('created_date', 'N/A')
+        created = case_metadata.get('created_date', 'N/A')[:10] if case_metadata.get('created_date') else 'N/A'
         
         msg += f"🔄 Workflow Stage: {workflow_stage.replace('_', ' ').title()}\n"
         msg += f"📅 Created: {created}\n"
@@ -251,22 +300,100 @@ def create_chat_tools(chat_interface):
         documents = case_metadata.get('documents', [])
         total = len(documents)
         
-        if total > 0:
-            msg += f"📄 Documents: {total}\n\n"
-        else:
-            msg += "📄 No documents in this case yet.\n\n"
+        msg += f"📄 **Documents:** {total}\n\n"
         
-        # Individual document details
+        # Get detailed info for each document from intake
+        intake_dir = Path(settings.documents_dir) / "intake"
+        doc_types = {}
+        all_persons = []
+        all_id_numbers = {}
+        
         if documents:
-            msg += "📋 Documents:\n"
+            msg += "📋 **Document Details:**\n"
             msg += "-" * 60 + "\n"
+            
             for idx, doc_id in enumerate(documents, 1):
-                msg += f"{idx}. {doc_id}\n"
+                doc_meta_file = intake_dir / f"{doc_id}.metadata.json"
+                if doc_meta_file.exists():
+                    try:
+                        with open(doc_meta_file, 'r') as f:
+                            doc_meta = json.load(f)
+                        
+                        doc_type = doc_meta.get('classification', {}).get('document_type', 'unknown')
+                        conf = doc_meta.get('classification', {}).get('confidence', 0)
+                        doc_types[doc_type] = doc_types.get(doc_type, 0) + 1
+                        
+                        msg += f"{idx}. {fmt_id(doc_id)}\n"
+                        msg += f"   Type: {doc_type.upper()} ({conf:.0%})\n"
+                        
+                        # Get person info
+                        entities = doc_meta.get('extraction', {}).get('entities', {})
+                        persons = entities.get('persons', [])
+                        for person in persons:
+                            name = person.get('name', '')
+                            if name and name not in [p.get('name') for p in all_persons]:
+                                all_persons.append(person)
+                            # Collect ID numbers
+                            for key in ['pan_number', 'aadhaar_number', 'passport_number', 'dl_number']:
+                                if person.get(key):
+                                    all_id_numbers[key.replace('_', ' ').title()] = person.get(key)
+                        
+                    except Exception as e:
+                        msg += f"{idx}. {fmt_id(doc_id)}: Error - {e}\n"
+                else:
+                    msg += f"{idx}. {fmt_id(doc_id)}: Metadata not found\n"
+            
+            msg += "\n"
+        
+        # Document type summary
+        if doc_types:
+            msg += "📊 **Document Types:**\n"
+            for dtype, count in sorted(doc_types.items(), key=lambda x: -x[1]):
+                msg += f"   • {dtype.upper()}: {count}\n"
+            msg += "\n"
+        
+        # Person summary
+        if all_persons:
+            msg += f"👥 **Identified Persons:** {len(all_persons)}\n"
+            for person in all_persons[:5]:
+                name = person.get('name', 'Unknown')
+                dob = person.get('date_of_birth', '')
+                msg += f"   • {name}"
+                if dob:
+                    msg += f" (DOB: {dob})"
+                msg += "\n"
+            if len(all_persons) > 5:
+                msg += f"   ... and {len(all_persons) - 5} more\n"
+            msg += "\n"
+        
+        # ID numbers summary
+        if all_id_numbers:
+            msg += "🆔 **ID Numbers Found:**\n"
+            for id_type, id_val in all_id_numbers.items():
+                msg += f"   • {id_type}: {id_val}\n"
+            msg += "\n"
+        
+        # Case summary if exists
+        case_summary = case_metadata.get('case_summary', {})
+        if case_summary:
+            primary = case_summary.get('primary_entity', {})
+            if primary:
+                msg += f"🏢 **Primary Entity:** {primary.get('name', 'Unknown')} ({primary.get('entity_type', 'unknown')})\n\n"
+            
+            kyc = case_summary.get('kyc_verification', {})
+            if kyc:
+                identity = "✅" if kyc.get('identity_verified') else "❌"
+                address = "✅" if kyc.get('address_verified') else "❌"
+                msg += f"✅ **KYC Status:** Identity {identity} | Address {address}\n"
+                
+                missing = kyc.get('missing_documents', [])
+                if missing:
+                    msg += f"⚠️  Missing: {', '.join(missing[:3])}\n"
         
         return msg
     
     @tool
-    def get_document_details(filename: str, case_reference: Optional[str] = None) -> str:
+    def get_document_details(document_id: str, case_reference: Optional[str] = None) -> str:
         """Get detailed metadata and processing results for a specific document.
         
         This tool retrieves comprehensive information about a document including:
@@ -277,58 +404,83 @@ def create_chat_tools(chat_interface):
         - File information and location
         
         Args:
-            filename: Name of the document file (e.g., 'passport.pdf')
-            case_reference: Case ID (optional, uses current case if not provided)
+            document_id: Document ID (e.g., 'DOC_20260207_130709_4FA11') or filename
+            case_reference: Case ID (optional, only needed if using filename)
             
         Returns:
             Detailed document information with all metadata and processing results.
         """
-        # Use current case if not specified
-        case_ref = case_reference or chat_interface.case_reference
+        intake_dir = Path(settings.documents_dir) / "intake"
+        metadata = None
+        doc_display_name = document_id
         
-        if not case_ref:
-            return "⚠️  No case selected. Please specify a case reference or switch to a case first."
-        
-        case_dir = Path(settings.documents_dir) / "cases" / case_ref
-        
-        if not case_dir.exists():
-            return f"❌ Case {case_ref} not found."
-        
-        # Find the document file
-        doc_path = case_dir / filename
-        if not doc_path.exists():
-            # Try to find similar files
-            similar_files = [f.name for f in case_dir.glob("*") if filename.lower() in f.name.lower()]
-            if similar_files:
-                return f"❌ Document '{filename}' not found. Did you mean one of these?\n" + "\n".join(f"  • {f}" for f in similar_files)
-            return f"❌ Document '{filename}' not found in case {case_ref}."
-        
-        # Load document metadata
-        metadata_file = case_dir / f".{filename}.metadata.json"
-        
-        if not metadata_file.exists():
-            return f"📄 Document: {filename}\n⚠️  No metadata found - document may not have been processed yet."
-        
-        try:
-            with open(metadata_file, 'r') as f:
-                metadata = json.load(f)
-        except Exception as e:
-            return f"❌ Error reading metadata: {str(e)}"
+        # Check if this is a document ID (starts with DOC_)
+        if document_id.startswith("DOC_"):
+            # Look up directly in intake folder
+            metadata_file = intake_dir / f"{document_id}.metadata.json"
+            
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+                    doc_display_name = document_id
+                except Exception as e:
+                    return f"❌ Error reading metadata for {fmt_id(document_id)}: {str(e)}"
+            else:
+                return f"❌ Document {fmt_id(document_id)} not found in intake folder."
+        else:
+            # Treat as filename - need case reference
+            case_ref = case_reference or chat_interface.case_reference
+            
+            if not case_ref:
+                return "⚠️  No case selected. For filename lookup, please specify a case reference or switch to a case first.\n\n💡 Tip: Use document ID (DOC_...) for direct lookup without a case."
+            
+            case_dir = Path(settings.documents_dir) / "cases" / case_ref
+            
+            if not case_dir.exists():
+                return f"❌ Case {case_ref} not found."
+            
+            # Find the document file
+            doc_path = case_dir / document_id
+            if not doc_path.exists():
+                # Try to find similar files
+                similar_files = [f.name for f in case_dir.glob("*") if document_id.lower() in f.name.lower()]
+                if similar_files:
+                    return f"❌ Document '{document_id}' not found. Did you mean one of these?\n" + "\n".join(f"  • {f}" for f in similar_files)
+                return f"❌ Document '{document_id}' not found in case {case_ref}."
+            
+            # Load document metadata from case folder
+            metadata_file = case_dir / f".{document_id}.metadata.json"
+            
+            if not metadata_file.exists():
+                return f"📄 Document: {document_id}\n⚠️  No metadata found - document may not have been processed yet."
+            
+            try:
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+            except Exception as e:
+                return f"❌ Error reading metadata: {str(e)}"
         
         # Build detailed report
-        msg = f"\n📄 Document Details: {filename}\n"
+        msg = f"\n📄 Document Details: {fmt_id(doc_display_name)}\n"
         msg += "=" * 70 + "\n\n"
         
         # Basic info
         doc_id = metadata.get('document_id', 'unknown')
         status = metadata.get('status', 'unknown')
-        file_size = doc_path.stat().st_size / 1024
+        original_filename = metadata.get('original_filename', 'unknown')
+        source_path = metadata.get('source_path', '')
+        linked_cases = metadata.get('linked_cases', [])
         
         msg += "📋 Basic Information:\n"
-        msg += f"  • Document ID: {doc_id}\n"
-        msg += f"  • File Size: {file_size:.1f} KB\n"
-        msg += f"  • Location: {doc_path}\n"
-        msg += f"  • Status: {status.upper()}\n\n"
+        msg += f"  • Document ID: {fmt_id(doc_id)}\n"
+        msg += f"  • Original Filename: {original_filename}\n"
+        if source_path:
+            msg += f"  • Source Path: {source_path}\n"
+        msg += f"  • Status: {status.upper()}\n"
+        if linked_cases:
+            msg += f"  • Linked Cases: {', '.join(f'`{c}`' for c in linked_cases)}\n"
+        msg += "\n"
         
         # Classification results
         classification = metadata.get('classification', {})
@@ -346,21 +498,57 @@ def create_chat_tools(chat_interface):
         # Extraction results
         extraction = metadata.get('extraction', {})
         if extraction:
-            extracted_data = extraction.get('extracted_data', {})
-            ocr_text = extraction.get('ocr_text', '')
+            # Check for entities structure (persons, companies, etc.)
+            entities = extraction.get('entities', {})
             
-            msg += "📊 Extracted Data:\n"
-            if extracted_data:
+            # Show persons
+            persons = entities.get('persons', [])
+            if persons:
+                msg += "👤 **Persons Found:**\n"
+                for person in persons:
+                    name = person.get('name', 'Unknown')
+                    msg += f"  • {name}\n"
+                    for key in ['date_of_birth', 'father_name', 'address', 'pan_number', 'aadhaar_number', 'passport_number', 'dl_number', 'gender', 'mobile', 'email']:
+                        if person.get(key):
+                            field_name = key.replace('_', ' ').title()
+                            msg += f"      {field_name}: {person.get(key)}\n"
+                msg += "\n"
+            
+            # Show companies
+            companies = entities.get('companies', [])
+            if companies:
+                msg += "🏢 **Companies Found:**\n"
+                for company in companies:
+                    name = company.get('name', 'Unknown')
+                    msg += f"  • {name}\n"
+                    for key in ['cin', 'registered_address', 'date_of_incorporation', 'gstin']:
+                        if company.get(key):
+                            field_name = key.replace('_', ' ').title()
+                            msg += f"      {field_name}: {company.get(key)}\n"
+                msg += "\n"
+            
+            # Show financial info
+            financial = entities.get('financial', [])
+            if financial:
+                msg += "💰 **Financial Info:**\n"
+                for fin in financial:
+                    for key, val in fin.items():
+                        if val and key not in ['source', 'type']:
+                            msg += f"  • {key.replace('_', ' ').title()}: {val}\n"
+                msg += "\n"
+            
+            # Legacy: extracted_data for backward compatibility
+            extracted_data = extraction.get('extracted_data', {})
+            if extracted_data and not entities:
+                msg += "📊 Extracted Data:\n"
                 for field, value in extracted_data.items():
                     if value and str(value).strip():
                         field_name = field.replace('_', ' ').title()
                         msg += f"  • {field_name}: {value}\n"
-            else:
-                msg += "  • No structured data extracted\n"
-            
-            msg += "\n"
+                msg += "\n"
             
             # OCR information
+            ocr_text = extraction.get('ocr_text', '')
             if ocr_text:
                 text_preview = ocr_text[:200].replace('\n', ' ')
                 msg += f"📝 OCR Text Preview:\n"
@@ -411,6 +599,455 @@ def create_chat_tools(chat_interface):
                 msg += f"  • {field_name}: {value}\n"
         
         return msg
+    
+    @tool
+    def find_document_by_id(document_id: str) -> str:
+        """Find a document by its ID across all cases.
+        
+        This tool searches for a document using its document ID (e.g., DOC_20260206_233526_AD733)
+        and returns the case it belongs to along with its details.
+        
+        Args:
+            document_id: The document ID to search for (e.g., DOC_20260206_233526_AD733)
+            
+        Returns:
+            Document location and details, or not found message.
+        """
+        cases_dir = Path(settings.documents_dir) / "cases"
+        
+        if not cases_dir.exists():
+            return "❌ No cases directory found."
+        
+        # Search through all cases
+        for case_dir in cases_dir.iterdir():
+            if not case_dir.is_dir():
+                continue
+            
+            case_ref = case_dir.name
+            
+            # Check metadata files for matching document ID
+            for metadata_file in case_dir.glob(".*metadata.json"):
+                try:
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+                    
+                    doc_id = metadata.get('document_id', '')
+                    if doc_id == document_id or document_id in doc_id:
+                        # Found the document
+                        filename = metadata_file.name.replace('.metadata.json', '').lstrip('.')
+                        doc_type = metadata.get('classification', {}).get('document_type', 'unclassified')
+                        status = metadata.get('status', 'unknown')
+                        
+                        msg = f"\n🔍 Document Found!\n"
+                        msg += "=" * 60 + "\n\n"
+                        msg += f"📄 Document ID: {fmt_id(doc_id)}\n"
+                        msg += f"📁 Case: {fmt_id(case_ref)}\n"
+                        msg += f"📋 Filename: {filename}\n"
+                        msg += f"🏷️  Type: {doc_type}\n"
+                        msg += f"📊 Status: {status}\n\n"
+                        
+                        # Get extraction summary if available
+                        extraction = metadata.get('extraction', {})
+                        if extraction:
+                            fields = extraction.get('fields', {})
+                            if fields:
+                                msg += f"📝 Extracted Fields: {len(fields)}\n"
+                                for key, val in list(fields.items())[:5]:
+                                    msg += f"  • {key}: {val}\n"
+                                if len(fields) > 5:
+                                    msg += f"  ... and {len(fields) - 5} more fields\n"
+                        
+                        return msg
+                        
+                except Exception:
+                    continue
+            
+            # Also check case metadata for document list
+            case_metadata_file = case_dir / "case_metadata.json"
+            if case_metadata_file.exists():
+                try:
+                    with open(case_metadata_file, 'r') as f:
+                        case_meta = json.load(f)
+                    
+                    documents = case_meta.get('documents', [])
+                    if document_id in documents:
+                        msg = f"\n🔍 Document Found in Case!\n"
+                        msg += "=" * 60 + "\n\n"
+                        msg += f"📄 Document ID: {fmt_id(document_id)}\n"
+                        msg += f"📁 Case: {fmt_id(case_ref)}\n"
+                        msg += f"ℹ️  Document is registered in case metadata.\n"
+                        return msg
+                except Exception:
+                    continue
+        
+        return f"❌ Document {fmt_id(document_id)} not found in any case."
+    
+    @tool
+    def get_case_documents_with_extracted_data(case_reference: Optional[str] = None) -> str:
+        """Get all documents in a case with their extracted data for comparison and analysis.
+        
+        This tool retrieves comprehensive extracted data from all documents linked to a case,
+        including person names, addresses, dates of birth, ID numbers, and other key fields.
+        This is useful for:
+        - Checking for discrepancies between documents
+        - Verifying identity information across multiple documents
+        - KYC/AML compliance analysis
+        
+        Args:
+            case_reference: Case ID (optional, uses current case if not provided)
+            
+        Returns:
+            All documents with their extracted data for comparison.
+        """
+        # Use current case if not specified
+        case_ref = case_reference or chat_interface.case_reference
+        
+        if not case_ref:
+            return "⚠️  No case selected. Please specify a case reference or switch to a case first."
+        
+        case_dir = Path(settings.documents_dir) / "cases" / case_ref
+        
+        if not case_dir.exists():
+            return f"❌ Case {case_ref} not found."
+        
+        # Load case metadata to get linked documents
+        case_metadata_file = case_dir / "case_metadata.json"
+        if not case_metadata_file.exists():
+            return f"❌ Case metadata not found for {case_ref}."
+        
+        with open(case_metadata_file, 'r') as f:
+            case_meta = json.load(f)
+        
+        document_ids = case_meta.get('documents', [])
+        
+        if not document_ids:
+            return f"📋 No documents linked to case {fmt_id(case_ref)} yet."
+        
+        # Collect data from each document
+        intake_dir = Path(settings.documents_dir) / "intake"
+        documents_data = []
+        
+        msg = f"\n📊 Case {fmt_id(case_ref)} - Document Analysis\n"
+        msg += "=" * 70 + "\n\n"
+        
+        for doc_id in document_ids:
+            # Find metadata file in intake
+            doc_metadata_file = intake_dir / f"{doc_id}.metadata.json"
+            
+            if not doc_metadata_file.exists():
+                msg += f"⚠️  {fmt_id(doc_id)}: Metadata not found\n\n"
+                continue
+            
+            try:
+                with open(doc_metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                
+                doc_type = metadata.get('classification', {}).get('document_type', 'unknown')
+                confidence = metadata.get('classification', {}).get('confidence', 0)
+                extraction = metadata.get('extraction', {})
+                entities = extraction.get('entities', {})
+                
+                msg += f"📄 **{fmt_id(doc_id)}** - {doc_type.upper()} ({confidence:.0%} conf)\n"
+                msg += "-" * 60 + "\n"
+                
+                # Persons
+                persons = entities.get('persons', [])
+                if persons:
+                    msg += "👤 **Persons:**\n"
+                    for person in persons:
+                        name = person.get('name', 'Unknown')
+                        dob = person.get('date_of_birth', '')
+                        gender = person.get('gender', '')
+                        father = person.get('father_name', '')
+                        
+                        msg += f"   - Name: {name}\n"
+                        if dob:
+                            msg += f"     DOB: {dob}\n"
+                        if gender:
+                            msg += f"     Gender: {gender}\n"
+                        if father:
+                            msg += f"     Father: {father}\n"
+                
+                # Addresses
+                addresses = []
+                for person in persons:
+                    addr = person.get('address', '')
+                    if addr and addr not in addresses:
+                        addresses.append(addr)
+                
+                # Also check companies for addresses
+                companies = entities.get('companies', [])
+                for company in companies:
+                    addr = company.get('address', '') or company.get('registered_address', '')
+                    if addr and addr not in addresses:
+                        addresses.append(addr)
+                
+                if addresses:
+                    msg += "📍 **Addresses:**\n"
+                    for addr in addresses:
+                        msg += f"   - {addr}\n"
+                
+                # ID Numbers (PAN, Aadhaar, Passport, DL, etc.)
+                id_fields = {}
+                for person in persons:
+                    for key in ['pan_number', 'aadhaar_number', 'passport_number', 'dl_number', 'license_number', 'id_number']:
+                        if person.get(key):
+                            id_fields[key.replace('_', ' ').title()] = person.get(key)
+                
+                if id_fields:
+                    msg += "🆔 **ID Numbers:**\n"
+                    for key, val in id_fields.items():
+                        msg += f"   - {key}: {val}\n"
+                
+                # Financial info
+                financials = entities.get('financial', [])
+                if financials:
+                    msg += "💰 **Financial:**\n"
+                    for fin in financials:
+                        for key, val in fin.items():
+                            if val and key not in ['source', 'type']:
+                                msg += f"   - {key.replace('_', ' ').title()}: {val}\n"
+                
+                msg += "\n"
+                
+                # Store for discrepancy analysis
+                documents_data.append({
+                    'doc_id': doc_id,
+                    'doc_type': doc_type,
+                    'persons': persons,
+                    'addresses': addresses,
+                    'id_fields': id_fields
+                })
+                
+            except Exception as e:
+                msg += f"❌ {fmt_id(doc_id)}: Error reading - {str(e)}\n\n"
+        
+        # Add summary and discrepancy hints
+        msg += "=" * 70 + "\n"
+        msg += f"📊 **Summary:** {len(documents_data)} documents analyzed\n\n"
+        
+        # Collect all unique names and addresses for quick comparison
+        all_names = []
+        all_addresses = []
+        for doc in documents_data:
+            for person in doc.get('persons', []):
+                name = person.get('name', '')
+                if name and name not in all_names:
+                    all_names.append(name)
+            for addr in doc.get('addresses', []):
+                if addr not in all_addresses:
+                    all_addresses.append(addr)
+        
+        if all_names:
+            msg += f"👥 **Unique Names Found:** {len(all_names)}\n"
+            for name in all_names[:10]:
+                msg += f"   - {name}\n"
+            if len(all_names) > 10:
+                msg += f"   ... and {len(all_names) - 10} more\n"
+        
+        if all_addresses:
+            msg += f"\n📍 **Unique Addresses Found:** {len(all_addresses)}\n"
+            for addr in all_addresses[:5]:
+                msg += f"   - {addr[:80]}...\n" if len(addr) > 80 else f"   - {addr}\n"
+        
+        msg += "\n💡 **Tip:** Look for name spelling variations, address mismatches, or inconsistent dates across documents."
+        
+        return msg
+    
+    @tool
+    def summarize_case(case_reference: Optional[str] = None, focus: Optional[str] = None) -> str:
+        """Generate an intelligent LLM-powered summary of a case with all its documents.
+        
+        This tool gathers all case data and document extractions, then uses the LLM
+        to generate a comprehensive, intelligent summary. The LLM analyzes:
+        - All extracted person information across documents
+        - Document types and their verification status
+        - Potential discrepancies or inconsistencies
+        - KYC/AML compliance status
+        - Missing documents or information
+        
+        Args:
+            case_reference: Case ID (optional, uses current case if not provided)
+            focus: Optional focus area - 'discrepancies', 'persons', 'verification', 'summary'
+            
+        Returns:
+            LLM-generated intelligent summary of the case.
+        """
+        from langchain_core.messages import HumanMessage
+        
+        # Use current case if not specified
+        case_ref = case_reference or chat_interface.case_reference
+        
+        if not case_ref:
+            return "⚠️  No case selected. Please specify a case reference or switch to a case first."
+        
+        case_dir = Path(settings.documents_dir) / "cases" / case_ref
+        
+        if not case_dir.exists():
+            return f"❌ Case {case_ref} not found."
+        
+        # Load case metadata
+        case_metadata_file = case_dir / "case_metadata.json"
+        if not case_metadata_file.exists():
+            return f"❌ Case metadata not found for {case_ref}."
+        
+        with open(case_metadata_file, 'r') as f:
+            case_meta = json.load(f)
+        
+        document_ids = case_meta.get('documents', [])
+        
+        if not document_ids:
+            return f"📋 No documents linked to case {fmt_id(case_ref)} yet. Add documents first."
+        
+        # Collect all document data
+        intake_dir = Path(settings.documents_dir) / "intake"
+        documents_data = []
+        
+        for doc_id in document_ids:
+            doc_metadata_file = intake_dir / f"{doc_id}.metadata.json"
+            
+            if doc_metadata_file.exists():
+                try:
+                    with open(doc_metadata_file, 'r') as f:
+                        metadata = json.load(f)
+                    
+                    doc_type = metadata.get('classification', {}).get('document_type', 'unknown')
+                    confidence = metadata.get('classification', {}).get('confidence', 0)
+                    extraction = metadata.get('extraction', {})
+                    entities = extraction.get('entities', {})
+                    ocr_text = extraction.get('ocr_text', '')[:500]  # First 500 chars
+                    
+                    documents_data.append({
+                        'document_id': doc_id,
+                        'document_type': doc_type,
+                        'confidence': f"{confidence:.0%}",
+                        'persons': entities.get('persons', []),
+                        'companies': entities.get('companies', []),
+                        'financial': entities.get('financial', []),
+                        'ocr_preview': ocr_text[:200] if ocr_text else ''
+                    })
+                except Exception as e:
+                    documents_data.append({
+                        'document_id': doc_id,
+                        'error': str(e)
+                    })
+        
+        # Build context for LLM
+        case_context = {
+            'case_reference': case_ref,
+            'created_date': case_meta.get('created_date', 'unknown'),
+            'status': case_meta.get('status', 'unknown'),
+            'workflow_stage': case_meta.get('workflow_stage', 'unknown'),
+            'total_documents': len(document_ids),
+            'documents': documents_data,
+            'existing_summary': case_meta.get('case_summary', {})
+        }
+        
+        # Build summarization prompt based on focus
+        focus_instructions = ""
+        if focus == 'discrepancies':
+            focus_instructions = """
+Focus specifically on finding DISCREPANCIES and INCONSISTENCIES:
+- Compare names across all documents - look for spelling variations
+- Compare dates of birth - are they consistent?
+- Compare addresses - do they match?
+- Look for any mismatched ID numbers
+- Flag any suspicious patterns"""
+        elif focus == 'persons':
+            focus_instructions = """
+Focus specifically on PERSON IDENTIFICATION:
+- List all unique individuals identified
+- Their relationship to the case (applicant, director, etc.)
+- All ID documents provided for each person
+- Verification status for each person"""
+        elif focus == 'verification':
+            focus_instructions = """
+Focus specifically on KYC VERIFICATION STATUS:
+- Which identity documents are verified?
+- Which address proofs are verified?
+- What documents are still missing?
+- Overall compliance readiness"""
+        else:
+            focus_instructions = """
+Provide a comprehensive executive summary covering:
+- Primary entity and key persons
+- Document verification status
+- Notable findings or concerns
+- Recommended next steps"""
+        
+        summarization_prompt = f"""You are a KYC/AML compliance analyst. Analyze the following case data and provide an intelligent summary.
+
+CASE DATA:
+```json
+{json.dumps(case_context, indent=2, default=str)}
+```
+
+{focus_instructions}
+
+Provide your analysis in a clear, professional format with:
+1. **Case Overview** - Brief description of the case
+2. **Key Findings** - Important information discovered
+3. **Document Analysis** - Summary of each document type
+4. **Identified Persons** - All persons found with their details
+5. **Discrepancies/Concerns** - Any issues or inconsistencies found
+6. **Verification Status** - What's verified vs pending
+7. **Recommendations** - Next steps or missing items
+
+Be specific and reference document IDs when mentioning findings. Use the extracted data to draw meaningful conclusions."""
+
+        # Check if we have access to LLM through chat_interface
+        if hasattr(chat_interface, 'llm') and chat_interface.llm:
+            try:
+                # Use the LLM to generate summary
+                response = chat_interface.llm.invoke([HumanMessage(content=summarization_prompt)])
+                
+                # Extract text from response
+                if hasattr(response, 'content'):
+                    if isinstance(response.content, list):
+                        text_parts = []
+                        for block in response.content:
+                            if isinstance(block, dict) and block.get('type') == 'text':
+                                text_parts.append(block.get('text', ''))
+                            elif isinstance(block, str):
+                                text_parts.append(block)
+                        return '\n'.join(text_parts)
+                    return response.content
+                return str(response)
+                
+            except Exception as e:
+                logger.error(f"LLM summarization error: {e}")
+                return f"❌ Error generating LLM summary: {str(e)}\n\nFalling back to data dump:\n{json.dumps(case_context, indent=2, default=str)[:2000]}"
+        else:
+            # Fallback: return structured data for the outer LLM to summarize
+            return f"""📊 **Case Data for Analysis: {fmt_id(case_ref)}**
+
+Please summarize the following case data:
+
+```json
+{json.dumps(case_context, indent=2, default=str)[:4000]}
+```
+
+{focus_instructions}"""
+    
+    @tool
+    def analyze_case_discrepancies(case_reference: Optional[str] = None) -> str:
+        """Analyze a case for discrepancies and inconsistencies across documents.
+        
+        This tool specifically looks for:
+        - Name spelling variations across documents
+        - Mismatched dates of birth
+        - Address inconsistencies
+        - Different ID numbers for same person
+        - Suspicious patterns
+        
+        Args:
+            case_reference: Case ID (optional, uses current case if not provided)
+            
+        Returns:
+            Detailed discrepancy analysis with specific findings.
+        """
+        # Delegate to summarize_case with discrepancies focus
+        return summarize_case.invoke({'case_reference': case_reference, 'focus': 'discrepancies'})
     
     @tool
     def create_new_case(case_reference: str, description: Optional[str] = None) -> str:
@@ -869,7 +1506,7 @@ def create_chat_tools(chat_interface):
             extraction_status = extraction.get('status', 'pending')
             
             # Build status message
-            msg = f"\n📄 Document: {document_id}\n"
+            msg = f"\n📄 Document: {fmt_id(document_id)}\n"
             msg += f"   📁 File: {metadata.get('original_filename', 'unknown')}\n\n"
             msg += f"Stage Status:\n"
             msg += f"   ✅ Intake: completed\n"
@@ -909,7 +1546,7 @@ def create_chat_tools(chat_interface):
             # Extraction if needed
             if extraction_status != 'completed':
                 msg += "\n📊 Running ExtractionAgent...\n"
-                extract_result = extract_document_data.invoke({"document_id": document_id, "document_type": doc_type})
+                extract_result = extract_document_data.run(document_id=document_id, document_type=doc_type)
                 
                 if extract_result.get('success'):
                     extracted_fields = extract_result.get('extracted_fields', {})
@@ -1016,7 +1653,7 @@ def create_chat_tools(chat_interface):
                 json.dump(metadata, f, indent=2)
             
             msg = f"✅ Stage reset successfully!\n\n"
-            msg += f"📄 Document: {document_id}\n"
+            msg += f"📄 Document: {fmt_id(document_id)}\n"
             msg += f"🔄 Stage Reset: {stage_name}\n"
             msg += f"📝 Reason: {reason}\n"
             msg += f"⏰ Reset at: {datetime.now().isoformat()}\n\n"
@@ -1152,7 +1789,7 @@ def create_chat_tools(chat_interface):
                 
                 # Extraction
                 msg += "📊 Running ExtractionAgent...\n"
-                extract_result = extract_document_data.invoke({"document_id": doc_id, "document_type": doc_type})
+                extract_result = extract_document_data.run(document_id=doc_id, document_type=doc_type)
                 
                 if extract_result.get('success'):
                     extracted_fields = extract_result.get('extracted_fields', {})
@@ -1222,7 +1859,7 @@ def create_chat_tools(chat_interface):
                     doc_type = class_result.get('document_type')
                     
                     # Extraction
-                    extract_result = extract_document_data.invoke({"document_id": doc_id, "document_type": doc_type})
+                    extract_result = extract_document_data.run(document_id=doc_id, document_type=doc_type)
                     
                     if extract_result.get('success'):
                         mark_document_processed(doc_id, 'completed')
@@ -1401,12 +2038,16 @@ def create_chat_tools(chat_interface):
     
     return [
         list_all_cases,
-        list_all_documents,  # NEW: List documents with filtering
+        list_all_documents,  # List documents with filtering
         get_current_status, 
         switch_case, 
         get_case_details, 
         get_case_status_with_metadata, 
         get_document_details,
+        find_document_by_id,  # Find document by ID across all cases
+        get_case_documents_with_extracted_data,  # Get all docs with extracted data for comparison
+        summarize_case,  # LLM-powered intelligent case summary
+        analyze_case_discrepancies,  # Analyze discrepancies across documents
         create_new_case,
         update_case_metadata,
         delete_case,
@@ -1416,7 +2057,7 @@ def create_chat_tools(chat_interface):
         process_document_by_id,
         reset_document_stage,
         link_document_to_case,
-        run_document_pipeline,  # NEW: Full pipeline execution
+        run_document_pipeline,  # Full pipeline execution
         view_queue_status,
         process_next_from_queue,
         process_all_queued_documents,
