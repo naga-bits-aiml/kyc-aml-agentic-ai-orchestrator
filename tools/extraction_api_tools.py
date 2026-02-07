@@ -18,7 +18,7 @@ import requests
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List
-from langchain_core.tools import tool
+from crewai.tools import tool
 
 # Import utilities
 try:
@@ -806,7 +806,7 @@ def batch_extract_documents(document_ids: list) -> Dict[str, Any]:
     failed_count = 0
     
     for doc_id in document_ids:
-        result = extract_document_data.invoke({"document_id": doc_id})
+        result = extract_document_data.run(document_id=doc_id)
         results.append(result)
         
         if result["success"]:

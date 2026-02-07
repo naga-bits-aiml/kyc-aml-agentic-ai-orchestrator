@@ -17,7 +17,7 @@ import requests
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
-from langchain_core.tools import tool
+from crewai.tools import tool
 
 # Import utilities
 try:
@@ -385,7 +385,7 @@ def batch_classify_documents(document_ids: list) -> Dict[str, Any]:
     failed_count = 0
     
     for doc_id in document_ids:
-        result = classify_document.invoke({"document_id": doc_id})
+        result = classify_document.run(document_id=doc_id)
         results.append(result)
         
         if result["success"]:

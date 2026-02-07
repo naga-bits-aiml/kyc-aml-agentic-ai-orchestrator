@@ -1,15 +1,23 @@
 """
 Chat interface tools for LLM tool calling.
 These tools enable the LLM to interact with the KYC-AML system via pipeline agents.
+
+NOTE: These tools use LangChain's @tool decorator (not CrewAI's) because they are
+used with LangChain's .bind_tools() in the chat interface, not with CrewAI agents.
 """
 from pathlib import Path
 from typing import Optional, Dict, Any
 import json
 import shutil
 from datetime import datetime
-from langchain_core.tools import tool
+from langchain_core.tools import tool  # LangChain tool for bind_tools() compatibility
 from utilities import settings, logger
 from case_metadata_manager import StagedCaseMetadataManager
+
+
+def fmt_id(doc_id: str) -> str:
+    """Format document/case ID for Markdown display using backticks to prevent underscore escaping."""
+    return f"`{doc_id}`" if doc_id else "unknown"
 
 
 def create_chat_tools(chat_interface):
@@ -325,7 +333,7 @@ def create_chat_tools(chat_interface):
         file_size = doc_path.stat().st_size / 1024
         
         msg += "📋 Basic Information:\n"
-        msg += f"  • Document ID: {doc_id}\n"
+        msg += f"  • Document ID: {fmt_id(doc_id)}\n"
         msg += f"  • File Size: {file_size:.1f} KB\n"
         msg += f"  • Location: {doc_path}\n"
         msg += f"  • Status: {status.upper()}\n\n"
@@ -869,7 +877,7 @@ def create_chat_tools(chat_interface):
             extraction_status = extraction.get('status', 'pending')
             
             # Build status message
-            msg = f"\n📄 Document: {document_id}\n"
+            msg = f"\n📄 Document: {fmt_id(document_id)}\n"
             msg += f"   📁 File: {metadata.get('original_filename', 'unknown')}\n\n"
             msg += f"Stage Status:\n"
             msg += f"   ✅ Intake: completed\n"
@@ -909,7 +917,7 @@ def create_chat_tools(chat_interface):
             # Extraction if needed
             if extraction_status != 'completed':
                 msg += "\n📊 Running ExtractionAgent...\n"
-                extract_result = extract_document_data.invoke({"document_id": document_id, "document_type": doc_type})
+                extract_result = extract_document_data.run(document_id=document_id, document_type=doc_type)
                 
                 if extract_result.get('success'):
                     extracted_fields = extract_result.get('extracted_fields', {})
@@ -1016,7 +1024,7 @@ def create_chat_tools(chat_interface):
                 json.dump(metadata, f, indent=2)
             
             msg = f"✅ Stage reset successfully!\n\n"
-            msg += f"📄 Document: {document_id}\n"
+            msg += f"📄 Document: {fmt_id(document_id)}\n"
             msg += f"🔄 Stage Reset: {stage_name}\n"
             msg += f"📝 Reason: {reason}\n"
             msg += f"⏰ Reset at: {datetime.now().isoformat()}\n\n"
@@ -1152,7 +1160,7 @@ def create_chat_tools(chat_interface):
                 
                 # Extraction
                 msg += "📊 Running ExtractionAgent...\n"
-                extract_result = extract_document_data.invoke({"document_id": doc_id, "document_type": doc_type})
+                extract_result = extract_document_data.run(document_id=doc_id, document_type=doc_type)
                 
                 if extract_result.get('success'):
                     extracted_fields = extract_result.get('extracted_fields', {})
@@ -1222,7 +1230,7 @@ def create_chat_tools(chat_interface):
                     doc_type = class_result.get('document_type')
                     
                     # Extraction
-                    extract_result = extract_document_data.invoke({"document_id": doc_id, "document_type": doc_type})
+                    extract_result = extract_document_data.run(document_id=doc_id, document_type=doc_type)
                     
                     if extract_result.get('success'):
                         mark_document_processed(doc_id, 'completed')

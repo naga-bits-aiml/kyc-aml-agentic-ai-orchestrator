@@ -15,7 +15,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List
 from collections import Counter
-from langchain_core.tools import tool
+from crewai.tools import tool
 
 # Import utilities
 try:
@@ -27,6 +27,10 @@ except ImportError:
         documents_dir = "./documents"
     settings = Settings()
 
+
+def fmt_id(doc_id: str) -> str:
+    """Format document/case ID for display using backticks to prevent underscore escaping."""
+    return f"`{doc_id}`" if doc_id else "unknown"
 
 # ==================== TOOL DEFINITIONS ====================
 
@@ -172,7 +176,7 @@ def generate_report_text() -> str:
     Returns:
         Formatted text report suitable for display or logging.
     """
-    summary = generate_processing_summary.invoke({})
+    summary = generate_processing_summary.run()
     
     if not summary.get("success"):
         return f"Error generating report: {summary.get('error', 'Unknown error')}"
@@ -225,7 +229,7 @@ def generate_report_text() -> str:
             "-" * 40,
         ])
         for err in errors[:10]:  # Show first 10
-            lines.append(f"  • {err['document_id']}: {err['error'][:50]}...")
+            lines.append(f"  • {fmt_id(err['document_id'])}: {err['error'][:50]}...")
         if len(errors) > 10:
             lines.append(f"  ... and {len(errors) - 10} more")
     
@@ -238,7 +242,7 @@ def generate_report_text() -> str:
             "-" * 40,
         ])
         for rev in reviews[:10]:
-            lines.append(f"  • {rev['document_id']}: {rev['reason']}")
+            lines.append(f"  • {fmt_id(rev['document_id'])}: {rev['reason']}")
         if len(reviews) > 10:
             lines.append(f"  ... and {len(reviews) - 10} more")
     
@@ -310,7 +314,7 @@ def export_results_json(output_path: str = None) -> Dict[str, Any]:
     if not output_path:
         output_path = str(Path(settings.documents_dir) / "processing_results.json")
     
-    summary = generate_processing_summary.invoke({})
+    summary = generate_processing_summary.run()
     
     # Get detailed results for all documents
     intake_dir = Path(settings.documents_dir) / "intake"

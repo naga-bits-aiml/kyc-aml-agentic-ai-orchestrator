@@ -1,11 +1,13 @@
 # Document Processing Pipeline - Agent Configurations
 # 
-# This file defines the 5 agents for the document processing pipeline:
+# This file defines the 5 worker agents for the document processing pipeline:
 # 1. QueueAgent - Builds and manages the processing queue
 # 2. ClassificationAgent - Calls external API for document classification  
 # 3. ExtractionAgent - Calls external API for data extraction
 # 4. MetadataAgent - Tracks status and handles errors
 # 5. SummaryAgent - Generates final processing summary
+#
+# Note: SupervisorAgent config is in supervisor_agent.yaml (separate orchestrator)
 
 queue_agent:
   role: >

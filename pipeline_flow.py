@@ -135,7 +135,7 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
         logger.info(f"Building queue from: {input_path}")
         
         # Scan input path
-        scan_result = scan_input_path.invoke({"input_path": input_path})
+        scan_result = scan_input_path.run(input_path=input_path)
         
         if scan_result["path_type"] == "invalid":
             logger.error(f"Invalid input path: {scan_result['message']}")
@@ -147,7 +147,7 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
         
         # Get file list
         if scan_result["path_type"] == "folder":
-            expand_result = expand_folder.invoke({"folder_path": input_path})
+            expand_result = expand_folder.run(folder_path=input_path)
             file_paths = expand_result["files"]
         else:
             file_paths = [scan_result["path"]]
@@ -155,7 +155,7 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
         logger.info(f"Found {len(file_paths)} files to process")
         
         # Build queue (splits PDFs, creates metadata)
-        queue_result = build_processing_queue.invoke({"file_paths": file_paths})
+        queue_result = build_processing_queue.run(file_paths=file_paths)
         
         if queue_result["success"]:
             self.state.queue_built = True
@@ -185,7 +185,7 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
         
         while True:
             # Get next document
-            next_result = get_next_from_queue.invoke({})
+            next_result = get_next_from_queue.run()
             
             if not next_result["has_next"]:
                 logger.info("Queue processing complete")
@@ -207,10 +207,10 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
                 self.state.failed_count += 1
             
             # Mark as processed in queue
-            mark_document_processed.invoke({
-                "document_id": document_id,
-                "success": success
-            })
+            mark_document_processed.run(
+                document_id=document_id,
+                success=success
+            )
     
     def _process_single_document(self, document_id: str) -> bool:
         """
@@ -221,7 +221,7 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
         # ---- CLASSIFICATION ----
         logger.info(f"Classifying: {document_id}")
         
-        class_result = classify_document.invoke({"document_id": document_id})
+        class_result = classify_document.run(document_id=document_id)
         
         if not class_result["success"]:
             # Handle classification error
@@ -234,7 +234,7 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
                 return False
             
             # Retry classification
-            class_result = classify_document.invoke({"document_id": document_id})
+            class_result = classify_document.run(document_id=document_id)
             if not class_result["success"]:
                 return False
         
@@ -250,10 +250,10 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
         # ---- EXTRACTION ----
         logger.info(f"Extracting: {document_id}")
         
-        extract_result = extract_document_data.invoke({
-            "document_id": document_id,
-            "document_type": class_result["document_type"]
-        })
+        extract_result = extract_document_data.run(
+            document_id=document_id,
+            document_type=class_result["document_type"]
+        )
         
         if not extract_result["success"]:
             # Handle extraction error
@@ -266,10 +266,10 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
                 return False
             
             # Retry extraction
-            extract_result = extract_document_data.invoke({
-                "document_id": document_id,
-                "document_type": class_result["document_type"]
-            })
+            extract_result = extract_document_data.run(
+                document_id=document_id,
+                document_type=class_result["document_type"]
+            )
             if not extract_result["success"]:
                 return False
         
@@ -297,18 +297,18 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
         })
         
         # Record error
-        record_error.invoke({
-            "document_id": document_id,
-            "stage": stage,
-            "error_message": error
-        })
+        record_error.run(
+            document_id=document_id,
+            stage=stage,
+            error_message=error
+        )
         
         # Check retry eligibility
-        retry_check = check_retry_eligible.invoke({
-            "document_id": document_id,
-            "stage": stage,
-            "max_retries": self.max_retries
-        })
+        retry_check = check_retry_eligible.run(
+            document_id=document_id,
+            stage=stage,
+            max_retries=self.max_retries
+        )
         
         if retry_check["eligible"]:
             logger.info(f"Retrying {stage} for {document_id} "
@@ -316,18 +316,18 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
             self.state.retry_count += 1
             
             # Reset stage for retry
-            reset_stage_for_retry.invoke({
-                "document_id": document_id,
-                "stage": stage
-            })
+            reset_stage_for_retry.run(
+                document_id=document_id,
+                stage=stage
+            )
             return True
         else:
             # Flag for review
             logger.warning(f"Max retries exceeded for {document_id}, flagging for review")
-            flag_for_review.invoke({
-                "document_id": document_id,
-                "reason": f"Max retries exceeded at {stage}: {error}"
-            })
+            flag_for_review.run(
+                document_id=document_id,
+                reason=f"Max retries exceeded at {stage}: {error}"
+            )
             return False
     
     # ==================== STAGE 3: GENERATE SUMMARY ====================
@@ -345,13 +345,13 @@ class DocumentProcessingPipeline(Flow[PipelineState] if FLOW_AVAILABLE else obje
         logger.info("Generating processing summary...")
         
         # Generate summary
-        summary_result = generate_processing_summary.invoke({})
+        summary_result = generate_processing_summary.run()
         
         # Generate text report
-        report_text = generate_report_text.invoke({})
+        report_text = generate_report_text.run()
         
         # Export results
-        export_result = export_results_json.invoke({})
+        export_result = export_results_json.run()
         
         # Store summary
         self.state.summary = {
@@ -412,20 +412,18 @@ def run_pipeline(input_path: str) -> Dict[str, Any]:
     }
 
 
-def run_pipeline_sync(input_path: str) -> Dict[str, Any]:
+def run_pipeline_sync(input_path: str, case_reference: str = None) -> Dict[str, Any]:
     """
     Run the pipeline synchronously without Flow (fallback).
     
-    Documents are processed independently. Use link_document_to_case
-    to associate documents with cases after processing.
-    
     Args:
         input_path: File or folder path to process
+        case_reference: Optional case to link documents to
         
     Returns:
         Pipeline results with success status, summary, and processed documents
     """
-    logger.info(f"Running pipeline for: {input_path}")
+    logger.info(f"Running pipeline for: {input_path}" + (f" (case: {case_reference})" if case_reference else ""))
     
     results = {
         "success": False,
@@ -444,7 +442,7 @@ def run_pipeline_sync(input_path: str) -> Dict[str, Any]:
     }
     
     # 1. Scan input
-    scan_result = scan_input_path.invoke({"input_path": input_path})
+    scan_result = scan_input_path.run(input_path=input_path)
     if scan_result["path_type"] == "invalid":
         results["errors"].append(scan_result["message"])
         results["error"] = scan_result["message"]
@@ -452,13 +450,13 @@ def run_pipeline_sync(input_path: str) -> Dict[str, Any]:
     
     # 2. Expand folder if needed
     if scan_result["path_type"] == "folder":
-        expand_result = expand_folder.invoke({"folder_path": input_path})
+        expand_result = expand_folder.run(folder_path=input_path)
         file_paths = expand_result["files"]
     else:
         file_paths = [scan_result["path"]]
     
     # 3. Build queue
-    queue_result = build_processing_queue.invoke({"file_paths": file_paths})
+    queue_result = build_processing_queue.run(file_paths=file_paths)
     
     if not queue_result["success"]:
         results["errors"].extend(queue_result.get("errors", []))
@@ -469,19 +467,21 @@ def run_pipeline_sync(input_path: str) -> Dict[str, Any]:
     doc_type_counts = {}
     completed_count = 0
     failed_count = 0
+    all_document_ids = []  # Track ALL documents, not just successful ones
     
     # 4. Process each document
     while True:
-        next_result = get_next_from_queue.invoke({})
+        next_result = get_next_from_queue.run()
         
         if not next_result["has_next"]:
             break
         
         document_id = next_result["document_id"]
+        all_document_ids.append(document_id)  # Track every document
         doc_result = {"document_id": document_id}
         
         # Classify
-        class_result = classify_document.invoke({"document_id": document_id})
+        class_result = classify_document.run(document_id=document_id)
         doc_result["classification"] = class_result
         
         if class_result["success"]:
@@ -489,10 +489,10 @@ def run_pipeline_sync(input_path: str) -> Dict[str, Any]:
             doc_type_counts[doc_type] = doc_type_counts.get(doc_type, 0) + 1
             
             # Extract
-            extract_result = extract_document_data.invoke({
-                "document_id": document_id,
-                "document_type": doc_type
-            })
+            extract_result = extract_document_data.run(
+                document_id=document_id,
+                document_type=doc_type
+            )
             doc_result["extraction"] = extract_result
             
             if extract_result.get("success"):
@@ -506,13 +506,13 @@ def run_pipeline_sync(input_path: str) -> Dict[str, Any]:
         results["documents"].append(doc_result)
         
         # Mark processed
-        mark_document_processed.invoke({
-            "document_id": document_id,
-            "success": class_result["success"]
-        })
+        mark_document_processed.run(
+            document_id=document_id,
+            success=class_result["success"]
+        )
     
     # 5. Generate summary
-    summary_result = generate_processing_summary.invoke({})
+    summary_result = generate_processing_summary.run()
     
     total_docs = completed_count + failed_count
     results["success"] = failed_count == 0 and completed_count > 0
@@ -525,6 +525,40 @@ def run_pipeline_sync(input_path: str) -> Dict[str, Any]:
         "by_document_type": doc_type_counts,
         "detailed_summary": summary_result
     }
+    
+    # Link ALL documents to case if provided (regardless of processing status)
+    if case_reference and all_document_ids:
+        from tools.intake_tools import link_document_to_case_tool
+        
+        # Ensure case exists (create if needed)
+        case_dir = Path(settings.documents_dir) / "cases" / case_reference
+        case_metadata_path = case_dir / "case_metadata.json"
+        if not case_metadata_path.exists():
+            case_dir.mkdir(parents=True, exist_ok=True)
+            case_metadata = {
+                "case_reference": case_reference,
+                "created_date": datetime.now().isoformat(),
+                "status": "active",
+                "documents": []
+            }
+            with open(case_metadata_path, 'w') as f:
+                json.dump(case_metadata, f, indent=2)
+            logger.info(f"Auto-created case {case_reference} for document linking")
+        
+        results["case_reference"] = case_reference
+        results["linked_documents"] = []
+        for doc_id in all_document_ids:
+            try:
+                link_result = link_document_to_case_tool.run(document_id=doc_id, case_id=case_reference)
+                if link_result.get("success"):
+                    results["linked_documents"].append(doc_id)
+                else:
+                    logger.warning(f"Failed to link {doc_id} to {case_reference}: {link_result.get('error')}")
+            except Exception as e:
+                logger.warning(f"Failed to link {doc_id} to {case_reference}: {e}")
+    
+    # Include all document IDs in results (for reference)
+    results["all_documents"] = all_document_ids
     
     if failed_count > 0:
         results["error"] = f"{failed_count} document(s) failed processing"

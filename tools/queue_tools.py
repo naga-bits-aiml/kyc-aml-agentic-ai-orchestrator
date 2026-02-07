@@ -17,7 +17,7 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-from langchain_core.tools import tool
+from crewai.tools import tool
 
 # Import utilities
 try:
@@ -474,7 +474,7 @@ def build_processing_queue(file_paths: List[str]) -> Dict[str, Any]:
         
         if path.suffix.lower() == '.pdf':
             # Split PDF and queue children
-            result = split_pdf_to_images.invoke({"pdf_path": str(path)})
+            result = split_pdf_to_images.run(pdf_path=str(path))
             if result["success"]:
                 pdf_parents.append(result["parent_document_id"])
                 queue.extend(result["child_documents"])

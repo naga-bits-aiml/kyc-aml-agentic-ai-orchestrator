@@ -19,6 +19,24 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Tool
 from utilities import config, settings, logger
 from utilities.llm_factory import create_llm, get_model_info
 from tools.chat_tools import create_chat_tools
+from agents.supervisor_agent import SupervisorAgent
+
+# Rich console for beautiful terminal output
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+
+# Global console for rich output
+console = Console()
+
+
+def print_markdown(text: str, title: str = None) -> None:
+    """Render Markdown text beautifully in the terminal using rich."""
+    md = Markdown(text)
+    if title:
+        console.print(Panel(md, title=title, border_style="blue"))
+    else:
+        console.print(md)
 
 
 class ChatInterface:
@@ -29,6 +47,7 @@ class ChatInterface:
         self.logger = logger
         self.crew = None
         self.llm = None
+        self.supervisor = None  # Supervisor agent for multi-step commands
         self.case_reference: Optional[str] = None
         self.conversation_history = []
         
@@ -109,12 +128,17 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             # Setup tools
             self._setup_tools()
             
+            # Initialize Supervisor Agent for multi-step command orchestration
+            self.supervisor = SupervisorAgent(chat_interface=self)
+            self.logger.info("✅ Supervisor agent initialized")
+            
         except Exception as e:
             self.logger.error(f"Failed to initialize system: {e}")
             print(f"\n⚠️  Warning: System initialization failed: {e}")
             print(f"Some features may not work. Please check your configuration.\n")
             self.llm = None
             self.crew = None
+            self.supervisor = None
     
     def _setup_tools(self):
         """Setup LLM tools for the chat interface."""
@@ -125,12 +149,46 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         self.tools = create_chat_tools(self)
         self.llm_with_tools = self.llm.bind_tools(self.tools)
     
+    def _is_multi_step_command(self, user_message: str) -> bool:
+        """
+        Detect if user message contains multiple commands that should be orchestrated.
+        
+        Multi-step indicators:
+        - Multiple action keywords (create, process, summarize, etc.)
+        - Conjunctions connecting actions (and, then, after that)
+        - Comma-separated instructions
+        """
+        message_lower = user_message.lower()
+        
+        # Action keywords
+        action_keywords = [
+            'create', 'switch', 'process', 'classify', 'extract', 
+            'summarize', 'summary', 'list', 'status', 'add', 'upload'
+        ]
+        
+        # Count action keywords
+        action_count = sum(1 for kw in action_keywords if kw in message_lower)
+        
+        # Check for chaining indicators
+        chain_indicators = [' and ', ' then ', ', then', ' after ', ' finally ']
+        has_chain = any(ind in message_lower for ind in chain_indicators)
+        
+        # Multi-step if: multiple actions OR chaining indicators with at least one action
+        return action_count >= 2 or (has_chain and action_count >= 1)
+    
     def get_llm_response(self, user_message: str) -> str:
         """Get response from LLM with tool calling support."""
         if not self.llm:
             return "❌ LLM not available. Use commands: help, exit"
         
         try:
+            # Check if this is a multi-step command that needs orchestration
+            if self.supervisor and self._is_multi_step_command(user_message):
+                self.logger.info(f"Multi-step command detected, routing to supervisor")
+                print("\n🎯 Multi-step command detected. Creating execution plan...")
+                return self.supervisor.process_command(user_message)
+            
+            # Single-step command: use regular LLM with tools
             # Add user message with context
             context = f"\nCurrent case: {self.case_reference or 'Not set'}"
             self.conversation_history.append(HumanMessage(content=user_message + context))
@@ -831,11 +889,13 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         else:
             model_info = ""
         
-        print("\n" + "="*60)
-        print("🤖 KYC-AML Pipeline Chat Interface")
-        print(f"✨ 5 Pipeline Agents with Tool Calling{model_info}")
-        print("="*60)
-        print("Type 'help' for commands, 'exit' to quit\n")
+        # Rich welcome banner
+        console.print()
+        console.rule("[bold blue]🤖 KYC-AML Pipeline Chat Interface[/bold blue]")
+        console.print(f"[cyan]✨ 5 Pipeline Agents with Tool Calling{model_info}[/cyan]", justify="center")
+        console.print("[dim]Type 'help' for commands, 'exit' to quit[/dim]", justify="center")
+        console.rule()
+        console.print()
         
         while True:
             try:
@@ -860,15 +920,17 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
                     # Return special code to trigger restart
                     return 2  # Exit code 2 signals reload
                 
-                # Print response with robot emoji
-                print(f"\n🤖 Assistant: {response}\n")
+                # Print response with rich Markdown rendering
+                console.print()  # Empty line
+                print_markdown(response, title="🤖 Assistant")
+                console.print()  # Empty line
                 
             except KeyboardInterrupt:
                 print("\n\n👋 Goodbye!")
                 break
             except Exception as e:
                 self.logger.error(f"Error: {e}")
-                print(f"\n❌ Error: {str(e)}\n")
+                console.print(f"\n[red]❌ Error: {str(e)}[/red]\n")
 
 
 def main():

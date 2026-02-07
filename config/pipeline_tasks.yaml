@@ -167,6 +167,38 @@ batch_extract_task:
 
 # ==================== METADATA AGENT TASKS ====================
 
+link_documents_to_case_task:
+  description: >
+    Link processed documents to a case.
+    A document can belong to multiple cases (many-to-many relationship).
+    This task updates both:
+    - Document metadata: adds case_id to linked_cases array
+    - Case metadata: adds document_id to documents array
+    
+    INPUT:
+    - document_ids: {document_ids} (list of document IDs to link)
+    - case_reference: {case_reference} (target case ID)
+    
+    STEPS:
+    1. For each document_id in document_ids:
+       - Call link_document_to_case(document_id, case_reference)
+    2. Return linking summary
+    
+    NOTE: Case metadata holds document references, not vice versa.
+    A document's linked_cases is for reverse lookup convenience.
+    
+  expected_output: >
+    JSON with linking results:
+    {
+      "success": true,
+      "case_reference": "KYC_2026_001",
+      "documents_linked": ["DOC_xxx", "DOC_yyy"],
+      "already_linked": [],
+      "failed": [],
+      "message": "Linked 2 documents to case KYC_2026_001"
+    }
+
+
 update_status_task:
   description: >
     Update the processing status for a document stage.

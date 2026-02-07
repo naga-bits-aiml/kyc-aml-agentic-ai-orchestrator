@@ -655,10 +655,10 @@ def organize_case_documents_tool(case_id: str, file_paths: List[str]) -> Dict[st
             "details": validation_result
         }
     
-    # Link all validated documents to case
+    # Link all validated documents to case using the tool's .run() method
     linked_docs = []
     for doc in validation_result["validated_documents"]:
-        link_result = link_document_to_case_tool(doc["document_id"], case_id)
+        link_result = link_document_to_case_tool.run(document_id=doc["document_id"], case_id=case_id)
         if link_result["success"]:
             linked_docs.append(link_result)
     
@@ -677,6 +677,9 @@ def link_document_to_case_tool(document_id: str, case_id: str) -> Dict[str, Any]
     Link an existing document to a case.
     Supports many-to-many relationships (one document can be linked to multiple cases).
     
+    Only updates case metadata - the case holds document references.
+    Document metadata is NOT updated (single source of truth in case).
+    
     Args:
         document_id: Globally unique document ID (e.g., DOC_20260127_143022_A3F8B)
         case_id: Case identifier (e.g., KYC_2026_001)
@@ -691,19 +694,19 @@ def link_document_to_case_tool(document_id: str, case_id: str) -> Dict[str, Any]
     logger.info(f"Linking document {document_id} to case {case_id}")
     
     try:
-        # Find document metadata file in intake or other stages
+        # Verify document exists in one of the stages
         stages = ["intake", "classification", "extraction", "processed"]
-        metadata_path = None
+        document_found = False
         current_stage = None
         
         for stage in stages:
             potential_path = Path(settings.documents_dir) / stage / f"{document_id}.metadata.json"
             if potential_path.exists():
-                metadata_path = potential_path
+                document_found = True
                 current_stage = stage
                 break
         
-        if not metadata_path:
+        if not document_found:
             return {
                 "success": False,
                 "document_id": document_id,
@@ -711,54 +714,42 @@ def link_document_to_case_tool(document_id: str, case_id: str) -> Dict[str, Any]
                 "error": f"Document {document_id} not found in any stage"
             }
         
-        # Load existing metadata
-        with open(metadata_path, 'r') as f:
-            metadata = json.load(f)
+        # Update case metadata to include this document
+        case_dir = Path(settings.documents_dir) / "cases" / case_id
+        case_metadata_path = case_dir / "case_metadata.json"
         
-        # Add case to linked_cases if not already present
-        if "linked_cases" not in metadata:
-            metadata["linked_cases"] = []
+        if not case_metadata_path.exists():
+            return {
+                "success": False,
+                "document_id": document_id,
+                "case_id": case_id,
+                "error": f"Case {case_id} not found"
+            }
         
-        if case_id not in metadata["linked_cases"]:
-            metadata["linked_cases"].append(case_id)
-            metadata["last_updated"] = datetime.now().isoformat()
+        with open(case_metadata_path, 'r') as f:
+            case_metadata = json.load(f)
+        
+        # Initialize documents array if not present
+        if "documents" not in case_metadata:
+            case_metadata["documents"] = []
+        
+        # Add document_id to case's documents list if not already present
+        if document_id not in case_metadata["documents"]:
+            case_metadata["documents"].append(document_id)
+            case_metadata["last_updated"] = datetime.now().isoformat()
             
-            # Save updated document metadata
-            with open(metadata_path, 'w') as f:
-                json.dump(metadata, f, indent=2)
+            # Save updated case metadata
+            with open(case_metadata_path, 'w') as f:
+                json.dump(case_metadata, f, indent=2)
             
-            # Now update the case metadata to include this document
-            case_dir = Path(settings.documents_dir) / "cases" / case_id
-            case_metadata_path = case_dir / "case_metadata.json"
-            
-            if case_metadata_path.exists():
-                with open(case_metadata_path, 'r') as f:
-                    case_metadata = json.load(f)
-                
-                # Add document_id to case's documents list if not already present
-                if "documents" not in case_metadata:
-                    case_metadata["documents"] = []
-                
-                # Simple array of document IDs
-                if document_id not in case_metadata["documents"]:
-                    case_metadata["documents"].append(document_id)
-                    
-                    # Save updated case metadata
-                    with open(case_metadata_path, 'w') as f:
-                        json.dump(case_metadata, f, indent=2)
-                    
-                    logger.info(f"Added document {document_id} to case {case_id}")
-            else:
-                logger.warning(f"Case metadata file not found: {case_metadata_path}")
-            
-            logger.info(f"Document {document_id} linked to case {case_id}")
+            logger.info(f"Linked document {document_id} to case {case_id}")
             
             return {
                 "success": True,
                 "document_id": document_id,
                 "case_id": case_id,
                 "stage": current_stage,
-                "linked_cases": metadata["linked_cases"],
+                "total_documents": len(case_metadata["documents"]),
                 "message": f"Document successfully linked to case {case_id}"
             }
         else:
@@ -767,7 +758,7 @@ def link_document_to_case_tool(document_id: str, case_id: str) -> Dict[str, Any]
                 "document_id": document_id,
                 "case_id": case_id,
                 "stage": current_stage,
-                "linked_cases": metadata["linked_cases"],
+                "total_documents": len(case_metadata["documents"]),
                 "message": f"Document already linked to case {case_id}"
             }
     except Exception as e:
