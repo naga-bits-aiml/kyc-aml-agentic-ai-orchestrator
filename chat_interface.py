@@ -818,55 +818,9 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             return msg + f"❌ Error: {str(e)}"
     
     def show_help(self) -> str:
-        """Show help information."""
-        return """
-╔════════════════════════════════════════════════════╗
-║     KYC-AML Pipeline Chat Interface - Help         ║
-╚════════════════════════════════════════════════════╝
-
-⚡ Quick Commands:
-   show cases       List recent cases (10)
-   show docs        List recent documents (10)
-   select case <ID> Select a case and load context
-   summarize case   Generate KYC summary for selected case
-   summarize case <ID>  Generate KYC summary for specific case
-   status           Show system status
-   help, ?          Show this help
-   reload           Reload code and restart
-   exit, quit       Exit chat
-
-🤖 Pipeline Agents:
-   • QueueAgent: Scans paths, expands folders, splits PDFs
-   • ClassificationAgent: Classifies documents via REST API
-   • ExtractionAgent: Extracts data via REST API
-   • MetadataAgent: Tracks status and handles errors
-   • SummaryAgent: Generates processing reports
-
-📋 Case Management:
-   "create case KYC-2026-001"    Create new case
-   "select case KYC-2026-001"    Select existing case
-   "summarize case"              Generate KYC summary
-   "link doc DOC_xxx to case KYC-2026-001"  Link document to case
-
-📄 Document Processing:
-   "process ~/Documents/passport.pdf"  Process single file
-   "run pipeline on ~/Documents/kyc"   Process folder
-   "show queue status"                 View processing queue
-
-💬 Natural Language:
-   Just ask naturally! The AI assistant can:
-   • List all cases and documents
-   • Show case details and document metadata
-   • Process documents with pipeline agents
-   • Link documents to cases
-
-✨ Examples:
-   "show cases"
-   "select case KYC-2026-001"
-   "show docs"
-   "process ~/Downloads/pan-1.pdf"
-   "link doc DOC_20260129_231813_A2DF2 to case KYC-2026-001"
-"""
+        """Show help information from config."""
+        from utilities import get_capabilities_text
+        return get_capabilities_text('cli')
     
     def handle_user_input(self, user_input: str) -> str:
         """Process user input and return response."""
@@ -889,10 +843,13 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         else:
             model_info = ""
         
-        # Rich welcome banner
+        # Rich welcome banner from config
+        from utilities import get_banner_text
+        banner = get_banner_text('cli')
+        
         console.print()
-        console.rule("[bold blue]🤖 KYC-AML Pipeline Chat Interface[/bold blue]")
-        console.print(f"[cyan]✨ 5 Pipeline Agents with Tool Calling{model_info}[/cyan]", justify="center")
+        console.rule(f"[bold blue]{banner['title']}[/bold blue]")
+        console.print(f"[cyan]✨ {banner['tagline']}{model_info}[/cyan]", justify="center")
         console.print("[dim]Type 'help' for commands, 'exit' to quit[/dim]", justify="center")
         console.rule()
         console.print()
@@ -922,7 +879,13 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
                 
                 # Print response with rich Markdown rendering
                 console.print()  # Empty line
-                print_markdown(response, title="🤖 Assistant")
+                
+                # Check if response contains box drawing (help output) - print directly
+                if response and ('╔' in response or '╚' in response):
+                    console.print(response)
+                else:
+                    print_markdown(response, title="🤖 Assistant")
+                
                 console.print()  # Empty line
                 
             except KeyboardInterrupt:

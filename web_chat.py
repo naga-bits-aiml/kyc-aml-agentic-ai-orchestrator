@@ -539,36 +539,10 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         return msg
     
     def _show_help(self) -> str:
-        """Show help message."""
-        return """# 📖 KYC-AML Assistant Help
-
-## Quick Commands
-- `list cases` / `show cases` - View all cases
-- `list docs` / `show documents` - View recent documents
-- `status` - Show system status
-- `select case <ID>` - Switch to a case
-- `help` - Show this help
-
-## Document Processing
-- `process ~/Documents/kyc_files` - Process a folder
-- `find document DOC_12345...` - Find a document by ID
-- `link document <DOC_ID> to case <CASE_ID>` - Link document to case
-
-## Case Management
-- `create case KYC_2026_001` - Create new case
-- `summarize case <ID>` - Generate case summary
-- `delete case <ID>` - Delete a case
-
-## Multi-Step Commands
-You can chain commands:
-- "Create case KYC_2026_002 and process documents from ~/Downloads"
-- "List cases and show the status of KYC_2026_001"
-
-## Tips
-- Documents can be processed without a case and linked later
-- Use the sidebar to upload files directly
-- Document IDs start with `DOC_` followed by timestamp
-"""
+        """Show help message from config."""
+        from utilities import get_capabilities_text, get_banner_text
+        banner = get_banner_text('web')
+        return f"# 📖 {banner['app_name']} - Help\n\n" + get_capabilities_text('web')
     
     def process_uploaded_files(self, uploaded_files, case_ref: Optional[str] = None) -> Dict[str, Any]:
         """Process uploaded files through the pipeline."""
@@ -937,11 +911,14 @@ def handle_quick_action(chat: WebChatInterface, action: str):
 
 def render_main_content(chat: WebChatInterface):
     """Render main chat interface."""
-    # Header
+    # Header from config
+    from utilities import get_banner_text
+    banner = get_banner_text('web')
     st.markdown(
-        '<div class="main-header">📄 KYC-AML Document Processing</div>',
+        f'<div class="main-header">{banner["title"]}</div>',
         unsafe_allow_html=True
     )
+    st.markdown(f'<p style="text-align: center; color: #666; margin-top: -10px;">{banner["subtitle"]}</p>', unsafe_allow_html=True)
     
     # Case viewer
     render_case_viewer(chat)
@@ -1019,12 +996,14 @@ def main():
     render_sidebar(chat)
     render_main_content(chat)
     
-    # Footer
+    # Footer from config
+    from utilities import get_banner_text
+    banner = get_banner_text('web')
     st.markdown("---")
     st.markdown(
-        "<div style='text-align: center; color: #666;'>"
-        "KYC-AML Agentic AI Orchestrator | Powered by CrewAI & Gemini"
-        "</div>",
+        f"<div style='text-align: center; color: #666;'>"
+        f"{banner['app_name']} | {banner['footer']}"
+        f"</div>",
         unsafe_allow_html=True
     )
 

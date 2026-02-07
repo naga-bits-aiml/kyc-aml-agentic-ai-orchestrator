@@ -1,0 +1,100 @@
+{
+  "app": {
+    "name": "KYC-AML Agentic AI Orchestrator",
+    "tagline": "Intelligent Document Processing with 5 Specialized Agents",
+    "version": "1.0.0"
+  },
+  "banner": {
+    "title": "🤖 KYC-AML Agentic AI Orchestrator",
+    "subtitle": "Intelligent Document Processing Powered by CrewAI",
+    "description": "Process, classify, and extract data from KYC/AML documents using AI agents"
+  },
+  "capabilities": {
+    "headline": "What I Can Do",
+    "items": [
+      {
+        "icon": "📄",
+        "title": "Process Documents",
+        "description": "Upload or point to documents - I'll classify and extract data automatically"
+      },
+      {
+        "icon": "🔍",
+        "title": "Classify Documents",
+        "description": "PAN cards, Aadhaar, passports, licenses, utility bills, bank statements & more"
+      },
+      {
+        "icon": "📊",
+        "title": "Extract Information",
+        "description": "Names, addresses, dates, ID numbers - structured data from any document"
+      },
+      {
+        "icon": "📁",
+        "title": "Manage Cases",
+        "description": "Create cases, link documents, track KYC verification status"
+      },
+      {
+        "icon": "🔗",
+        "title": "Link & Organize",
+        "description": "Documents can belong to multiple cases - flexible many-to-many linking"
+      },
+      {
+        "icon": "📝",
+        "title": "Generate Summaries",
+        "description": "AI-powered case summaries with discrepancy detection"
+      }
+    ]
+  },
+  "agents": {
+    "headline": "5 Specialized Pipeline Agents",
+    "items": [
+      {
+        "name": "QueueAgent",
+        "role": "Intake & Preparation",
+        "description": "Scans paths, expands folders, splits multi-page PDFs"
+      },
+      {
+        "name": "ClassificationAgent",
+        "role": "Document Classification",
+        "description": "Identifies document types via REST API with confidence scores"
+      },
+      {
+        "name": "ExtractionAgent",
+        "role": "Data Extraction",
+        "description": "Extracts structured data (names, IDs, addresses) via REST API"
+      },
+      {
+        "name": "MetadataAgent",
+        "role": "Status Tracking",
+        "description": "Tracks processing status, handles errors and retries"
+      },
+      {
+        "name": "SummaryAgent",
+        "role": "Reporting",
+        "description": "Generates processing reports and case summaries"
+      }
+    ]
+  },
+  "quick_commands": {
+    "headline": "Quick Commands",
+    "items": [
+      {"command": "list cases", "description": "View all KYC cases"},
+      {"command": "list docs", "description": "View recent documents"},
+      {"command": "status", "description": "Show system status"},
+      {"command": "help", "description": "Show detailed help"}
+    ]
+  },
+  "examples": {
+    "headline": "Try These",
+    "items": [
+      "Process ~/Downloads/passport.pdf",
+      "Create case KYC_2026_003",
+      "Show details for DOC_20260207_130709_4FA11",
+      "Summarize case KYC_2026_002",
+      "Find discrepancies in case KYC_2026_001"
+    ]
+  },
+  "footer": {
+    "text": "Powered by CrewAI & Google Gemini",
+    "tip": "Just ask naturally - I understand plain English!"
+  }
+}

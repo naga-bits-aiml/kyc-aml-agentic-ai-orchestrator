@@ -14,7 +14,10 @@ from .utils import (
     compute_file_hash,
     create_document_metadata,
     ensure_directory,
-    generate_document_id
+    generate_document_id,
+    load_ui_messages,
+    get_banner_text,
+    get_capabilities_text
 )
 
 __all__ = [
@@ -35,4 +38,7 @@ __all__ = [
     'ensure_directory',
     'calculate_file_hash',
     'generate_document_id',
+    'load_ui_messages',
+    'get_banner_text',
+    'get_capabilities_text',
 ]
