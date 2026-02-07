@@ -2,8 +2,40 @@
 
 This package contains all tools that agents can access and use to perform their tasks.
 
+## 📂 Tool Organization
+
+Tools are organized by **entity** for clear CRUD operations:
+
+| File | Entity | Operations |
+|------|--------|------------|
+| `document_tools.py` | Document | Create, Read, Update, Delete |
+| `case_tools.py` | Case | Create, Read, Update, Delete, Summary |
+| `file_tools.py` | File | Read, Write, Check, Info |
+| `queue_tools.py` | Queue | Scan, Expand, Split, Build |
+| `classification_api_tools.py` | Classification | Classify, Batch |
+| `extraction_api_tools.py` | Extraction | Extract, Batch |
+| `metadata_tools.py` | Metadata | Status, Errors, Retry |
+| `summary_tools.py` | Summary | Report, Export |
+| `stage_management_tools.py` | Workflow | Stage transitions |
+
+## 🔧 Tool Categories
+
+```python
+from tools import DOCUMENT_TOOLS, CASE_TOOLS, get_tools
+
+# Get specific category
+doc_tools = get_tools('document')  # 10 tools
+case_tools = get_tools('case')     # 11 tools
+all_tools = get_tools('all')       # 56 tools
+
+# Get tools for specific agent
+from tools import get_tools_for_agent
+intake_tools = get_tools_for_agent('intake')
+```
+
 **Features:**
-- ✅ Manual tool definitions
+- ✅ Entity-based tool organization (Document, Case)
+- ✅ CRUD operations for each entity
 - ✅ **API Auto-Discovery** via `/info` or OpenAPI specs
 - ✅ Dynamic tool generation from API schemas
 - ✅ Tool registry and categorization

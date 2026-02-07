@@ -20,7 +20,7 @@ import shutil
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utilities import logger, settings
-from tools.intake_tools import _validate_and_store_document, get_document_by_id_tool
+from tools.document_tools import _validate_and_store_document, get_document_by_id_tool
 from flows.document_processing_flow import DocumentProcessingFlow
 from utilities.llm_factory import create_llm
 

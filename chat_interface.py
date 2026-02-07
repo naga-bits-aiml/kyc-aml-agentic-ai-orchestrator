@@ -684,7 +684,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
     
     def _summarize_case(self, case_id: str) -> str:
         """Generate comprehensive case summary using LLM."""
-        from tools.case_summary_tools import generate_comprehensive_case_summary_tool
+        from tools.case_tools import generate_comprehensive_case_summary_tool
         
         case_id = case_id.upper()
         case_dir = Path(settings.documents_dir) / "cases" / case_id

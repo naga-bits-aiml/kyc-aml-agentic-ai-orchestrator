@@ -2,42 +2,93 @@
 Tools package for KYC-AML Agentic AI Orchestrator.
 
 This package contains all tools that agents can use to perform tasks.
-Tools are registered and made available to agents through the tool registry.
-Tools can also be auto-discovered from API specifications.
-
-Pipeline Agent Tools (NEW):
-- queue_tools: Scan paths, expand folders, split PDFs, build queue
-- classification_api_tools: REST API classification with retry
-- extraction_api_tools: REST API extraction with retry
-- metadata_tools: Status tracking, error handling, retry management
+Tools are organized by entity:
+- document_tools: CRUD operations for documents
+- case_tools: CRUD operations for cases
+- queue_tools: Document queue management
+- classification_api_tools: Document classification
+- extraction_api_tools: Data extraction
+- metadata_tools: Status tracking and error handling
 - summary_tools: Processing summary and reporting
+- file_tools: Basic file operations
+- stage_management_tools: Workflow stage management
 """
+
+# =============================================================================
+# DOCUMENT TOOLS - CRUD operations for documents
+# =============================================================================
 from .document_tools import (
+    # Create
     validate_document_tool,
+    batch_validate_documents_tool,
     store_document_tool,
+    # Read
+    get_document_by_id_tool,
     get_document_metadata_tool,
-    list_documents_tool
+    list_documents_tool,
+    list_all_documents_tool,
+    resolve_document_paths_tool,
+    # Update
+    update_document_metadata_tool,
+    # Delete
+    delete_document_tool,
 )
+
+# =============================================================================
+# CASE TOOLS - CRUD operations for cases
+# =============================================================================
+from .case_tools import (
+    # Create
+    create_case_tool,
+    # Read
+    get_case_tool,
+    list_cases_tool,
+    list_documents_by_case_tool,
+    # Update
+    update_case_tool,
+    link_document_to_case_tool,
+    unlink_document_from_case_tool,
+    # Delete
+    delete_case_tool,
+    # Summary
+    generate_case_summary_tool,
+    update_case_summary_tool,
+    generate_comprehensive_case_summary_tool,
+)
+
+# =============================================================================
+# FILE TOOLS - Basic file operations
+# =============================================================================
 from .file_tools import (
     read_file_tool,
     write_file_tool,
     check_file_exists_tool,
-    get_file_info_tool
+    get_file_info_tool,
 )
+
+# =============================================================================
+# EXTRACTION TOOLS - Document analysis
+# =============================================================================
 from .extraction_tools import (
     analyze_document_type,
     check_extraction_quality,
-    get_document_info
+    get_document_info,
 )
+
+# =============================================================================
+# STAGE MANAGEMENT TOOLS - Workflow stages
+# =============================================================================
 from .stage_management_tools import (
     move_document_to_stage,
     get_documents_by_stage,
     get_stage_summary,
     add_document_to_case,
-    update_document_metadata_in_stage
+    update_document_metadata_in_stage,
 )
 
-# Pipeline Agent Tools - NEW
+# =============================================================================
+# PIPELINE TOOLS - Queue, Classification, Extraction, Metadata, Summary
+# =============================================================================
 from .queue_tools import (
     scan_input_path,
     expand_folder,
@@ -45,34 +96,42 @@ from .queue_tools import (
     build_processing_queue,
     get_next_from_queue,
     get_queue_status,
-    mark_document_processed
+    mark_document_processed,
 )
+
 from .classification_api_tools import (
     classify_document,
     get_classification_result,
-    batch_classify_documents
+    batch_classify_documents,
 )
+
 from .extraction_api_tools import (
     extract_document_data,
     get_extraction_result,
-    batch_extract_documents
+    batch_extract_documents,
 )
+
 from .metadata_tools import (
     get_document_metadata,
     update_processing_status,
     record_error,
     check_retry_eligible,
     reset_stage_for_retry,
-    flag_for_review
+    flag_for_review,
 )
+
 from .summary_tools import (
     generate_processing_summary,
     generate_report_text,
     get_document_results,
-    export_results_json
+    export_results_json,
 )
 
-# Lazy imports to avoid circular dependencies
+
+# =============================================================================
+# LAZY IMPORTS - Avoid circular dependencies
+# =============================================================================
+
 def _get_classifier_tools():
     """Lazy load classifier tools to avoid circular imports."""
     try:
@@ -88,6 +147,7 @@ def _get_classifier_tools():
         ]
     except ImportError:
         return []
+
 
 def _get_api_discovery():
     """Lazy load API discovery to avoid circular imports."""
@@ -105,27 +165,65 @@ def _get_api_discovery():
     except ImportError:
         return {}
 
-# Tool Registry - All available tools for agents
-ALL_TOOLS = [
-    # Document processing tools
+
+# =============================================================================
+# TOOL COLLECTIONS
+# =============================================================================
+
+# Document CRUD tools
+DOCUMENT_TOOLS = [
     validate_document_tool,
+    batch_validate_documents_tool,
     store_document_tool,
+    get_document_by_id_tool,
     get_document_metadata_tool,
     list_documents_tool,
-    
-    # Extraction tools
-    analyze_document_type,
-    check_extraction_quality,
-    get_document_info,
-    
-    # File operation tools
+    list_all_documents_tool,
+    resolve_document_paths_tool,
+    update_document_metadata_tool,
+    delete_document_tool,
+]
+
+# Case CRUD tools
+CASE_TOOLS = [
+    create_case_tool,
+    get_case_tool,
+    list_cases_tool,
+    list_documents_by_case_tool,
+    update_case_tool,
+    link_document_to_case_tool,
+    unlink_document_from_case_tool,
+    delete_case_tool,
+    generate_case_summary_tool,
+    update_case_summary_tool,
+    generate_comprehensive_case_summary_tool,
+]
+
+# File operation tools
+FILE_TOOLS = [
     read_file_tool,
     write_file_tool,
     check_file_exists_tool,
     get_file_info_tool,
 ]
 
-# Pipeline Agent Tools (NEW)
+# Extraction tools
+EXTRACTION_TOOLS = [
+    analyze_document_type,
+    check_extraction_quality,
+    get_document_info,
+]
+
+# Stage management tools
+STAGE_TOOLS = [
+    move_document_to_stage,
+    get_documents_by_stage,
+    get_stage_summary,
+    add_document_to_case,
+    update_document_metadata_in_stage,
+]
+
+# Pipeline tools
 PIPELINE_QUEUE_TOOLS = [
     scan_input_path,
     expand_folder,
@@ -164,29 +262,22 @@ PIPELINE_SUMMARY_TOOLS = [
     export_results_json,
 ]
 
-# Tools grouped by category
-DOCUMENT_TOOLS = [
-    validate_document_tool,
-    store_document_tool,
-    get_document_metadata_tool,
-    list_documents_tool,
-]
+# All tools combined
+ALL_TOOLS = (
+    DOCUMENT_TOOLS + 
+    CASE_TOOLS + 
+    FILE_TOOLS + 
+    EXTRACTION_TOOLS + 
+    STAGE_TOOLS +
+    PIPELINE_QUEUE_TOOLS +
+    PIPELINE_CLASSIFICATION_TOOLS +
+    PIPELINE_EXTRACTION_TOOLS +
+    PIPELINE_METADATA_TOOLS +
+    PIPELINE_SUMMARY_TOOLS
+)
 
 # Classifier tools loaded lazily
 CLASSIFIER_TOOLS = None
-
-EXTRACTION_TOOLS = [
-    analyze_document_type,
-    check_extraction_quality,
-    get_document_info,
-]
-
-FILE_TOOLS = [
-    read_file_tool,
-    write_file_tool,
-    check_file_exists_tool,
-    get_file_info_tool,
-]
 
 
 def _initialize_all_tools():
@@ -194,13 +285,8 @@ def _initialize_all_tools():
     global CLASSIFIER_TOOLS, ALL_TOOLS
     if CLASSIFIER_TOOLS is None:
         CLASSIFIER_TOOLS = _get_classifier_tools()
-        ALL_TOOLS.extend(CLASSIFIER_TOOLS)
-        # Also add pipeline tools
-        ALL_TOOLS.extend(PIPELINE_QUEUE_TOOLS)
-        ALL_TOOLS.extend(PIPELINE_CLASSIFICATION_TOOLS)
-        ALL_TOOLS.extend(PIPELINE_EXTRACTION_TOOLS)
-        ALL_TOOLS.extend(PIPELINE_METADATA_TOOLS)
-        ALL_TOOLS.extend(PIPELINE_SUMMARY_TOOLS)
+        if CLASSIFIER_TOOLS:
+            ALL_TOOLS.extend(CLASSIFIER_TOOLS)
 
 
 def _get_tool_registry():
@@ -209,10 +295,11 @@ def _get_tool_registry():
     return {
         'all': ALL_TOOLS,
         'document': DOCUMENT_TOOLS,
+        'case': CASE_TOOLS,
         'classifier': CLASSIFIER_TOOLS or [],
         'extraction': EXTRACTION_TOOLS,
         'file': FILE_TOOLS,
-        # Pipeline tool categories
+        'stage': STAGE_TOOLS,
         'pipeline_queue': PIPELINE_QUEUE_TOOLS,
         'pipeline_classification': PIPELINE_CLASSIFICATION_TOOLS,
         'pipeline_extraction': PIPELINE_EXTRACTION_TOOLS,
@@ -226,9 +313,19 @@ def get_tools(category: str = 'all'):
     Get tools by category.
     
     Args:
-        category: Tool category ('all', 'document', 'classifier', 'extraction', 'file',
-                  'pipeline_queue', 'pipeline_classification', 'pipeline_extraction',
-                  'pipeline_metadata', 'pipeline_summary')
+        category: Tool category:
+            - 'all': All tools
+            - 'document': Document CRUD tools
+            - 'case': Case CRUD tools
+            - 'file': File operation tools
+            - 'extraction': Document analysis tools
+            - 'stage': Workflow stage tools
+            - 'classifier': Classification tools
+            - 'pipeline_queue': Queue management tools
+            - 'pipeline_classification': Classification API tools
+            - 'pipeline_extraction': Extraction API tools
+            - 'pipeline_metadata': Metadata tools
+            - 'pipeline_summary': Summary tools
         
     Returns:
         List of tools in the specified category
@@ -242,8 +339,15 @@ def get_tools_for_agent(agent_type: str):
     Get appropriate tools for a specific agent type.
     
     Args:
-        agent_type: Type of agent ('intake', 'classifier', 'extraction', 'general',
-                    'queue', 'metadata', 'summary')
+        agent_type: Type of agent:
+            - 'intake': Document intake tools
+            - 'classifier': Classification tools
+            - 'extraction': Extraction tools
+            - 'case': Case management tools
+            - 'queue': Queue management tools
+            - 'metadata': Metadata tools
+            - 'summary': Summary tools
+            - 'general': All tools
         
     Returns:
         List of tools appropriate for the agent
@@ -253,9 +357,17 @@ def get_tools_for_agent(agent_type: str):
     if agent_type == 'intake':
         return DOCUMENT_TOOLS + FILE_TOOLS
     elif agent_type == 'classifier':
-        return (CLASSIFIER_TOOLS or []) + FILE_TOOLS
+        return (CLASSIFIER_TOOLS or []) + PIPELINE_CLASSIFICATION_TOOLS + FILE_TOOLS
     elif agent_type == 'extraction':
-        return EXTRACTION_TOOLS + FILE_TOOLS
+        return EXTRACTION_TOOLS + PIPELINE_EXTRACTION_TOOLS + FILE_TOOLS
+    elif agent_type == 'case':
+        return CASE_TOOLS + DOCUMENT_TOOLS
+    elif agent_type == 'queue':
+        return PIPELINE_QUEUE_TOOLS + DOCUMENT_TOOLS
+    elif agent_type == 'metadata':
+        return PIPELINE_METADATA_TOOLS
+    elif agent_type == 'summary':
+        return PIPELINE_SUMMARY_TOOLS + CASE_TOOLS
     elif agent_type == 'general':
         return ALL_TOOLS
     else:
@@ -280,7 +392,6 @@ def discover_and_add_api_tools(base_url: str, api_key: str = None, agent_type: s
     logger.info(f"Discovering tools from API: {base_url}")
     discovered_tools = discover_api_tools(base_url, api_key)
     
-    # Add to classifier tools
     if discovered_tools:
         global CLASSIFIER_TOOLS, ALL_TOOLS
         _initialize_all_tools()
@@ -292,25 +403,66 @@ def discover_and_add_api_tools(base_url: str, api_key: str = None, agent_type: s
     return discovered_tools
 
 
+# =============================================================================
+# EXPORTS
+# =============================================================================
+
 __all__ = [
-    # Individual tools
+    # Document tools
     'validate_document_tool',
+    'batch_validate_documents_tool',
     'store_document_tool',
+    'get_document_by_id_tool',
     'get_document_metadata_tool',
     'list_documents_tool',
-    'analyze_document_type',
-    'check_extraction_quality',
-    'get_document_info',
+    'list_all_documents_tool',
+    'resolve_document_paths_tool',
+    'update_document_metadata_tool',
+    'delete_document_tool',
+    
+    # Case tools
+    'create_case_tool',
+    'get_case_tool',
+    'list_cases_tool',
+    'list_documents_by_case_tool',
+    'update_case_tool',
+    'link_document_to_case_tool',
+    'unlink_document_from_case_tool',
+    'delete_case_tool',
+    'generate_case_summary_tool',
+    'update_case_summary_tool',
+    'generate_comprehensive_case_summary_tool',
+    
+    # File tools
     'read_file_tool',
     'write_file_tool',
     'check_file_exists_tool',
     'get_file_info_tool',
     
+    # Extraction tools
+    'analyze_document_type',
+    'check_extraction_quality',
+    'get_document_info',
+    
+    # Stage tools
+    'move_document_to_stage',
+    'get_documents_by_stage',
+    'get_stage_summary',
+    'add_document_to_case',
+    'update_document_metadata_in_stage',
+    
     # Tool collections
     'ALL_TOOLS',
     'DOCUMENT_TOOLS',
-    'EXTRACTION_TOOLS',
+    'CASE_TOOLS',
     'FILE_TOOLS',
+    'EXTRACTION_TOOLS',
+    'STAGE_TOOLS',
+    'PIPELINE_QUEUE_TOOLS',
+    'PIPELINE_CLASSIFICATION_TOOLS',
+    'PIPELINE_EXTRACTION_TOOLS',
+    'PIPELINE_METADATA_TOOLS',
+    'PIPELINE_SUMMARY_TOOLS',
     
     # Helper functions
     'get_tools',

@@ -528,7 +528,7 @@ def run_pipeline_sync(input_path: str, case_reference: str = None) -> Dict[str, 
     
     # Link ALL documents to case if provided (regardless of processing status)
     if case_reference and all_document_ids:
-        from tools.intake_tools import link_document_to_case_tool
+        from tools.case_tools import link_document_to_case_tool
         
         # Ensure case exists (create if needed)
         case_dir = Path(settings.documents_dir) / "cases" / case_reference

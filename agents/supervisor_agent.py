@@ -486,7 +486,7 @@ class SupervisorAgent:
             return self._delegate_to_crew(step, action_cfg)
         
         # Use case-aware summary tool directly
-        from tools.case_summary_tools import generate_comprehensive_case_summary_tool
+        from tools.case_tools import generate_comprehensive_case_summary_tool
         result = generate_comprehensive_case_summary_tool.run(case_id=case_ref)
         return {"success": result.get("success", False), "case_reference": case_ref, "summary": result}
     
