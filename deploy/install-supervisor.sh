@@ -58,8 +58,10 @@ echo -e "${GREEN}✅ Supervisor installed${NC}"
 # Step 2: Enable Supervisor daemon service
 # =============================================================================
 echo -e "${YELLOW}🔧 Step 2: Enabling Supervisor daemon...${NC}"
+systemctl daemon-reload
 systemctl enable supervisor
 systemctl start supervisor
+systemctl status supervisor --no-pager || true
 echo -e "${GREEN}✅ Supervisor daemon enabled and started${NC}"
 
 # =============================================================================
