@@ -18,10 +18,10 @@ Deploy the KYC-AML Web Chat to Google Cloud Platform.
                         │  │ Supervisor                    │  │
                         │  │  └── Streamlit (port 8501)    │  │
                         │  └───────────────────────────────┘  │
-                        │  ┌───────────────────────────────┐  │
-                        │  │ App: /opt/kyc-aml-orchestrator│  │
-                        │  └───────────────────────────────┘  │
-                        └─────────────────────────────────────┘
+                        │  ┌─────────────────────────────────────────────────────────┐  │
+                        │  │ App: /home/g2023aa05111/kyc-aml-agentic-ai-orchestrator │  │
+                        │  └─────────────────────────────────────────────────────────┘  │
+                        └───────────────────────────────────────────────────────────────┘
 ```
 
 ## Quick Start
@@ -43,17 +43,18 @@ SSH into your new VM and run:
 
 ```bash
 # Clone the repository
-sudo git clone https://github.com/YOUR_USERNAME/kyc-aml-agentic-ai-orchestrator.git /opt/kyc-aml-orchestrator
+cd ~
+git clone https://github.com/naga-bits-aiml/kyc-aml-agentic-ai-orchestrator.git
 
 # Run setup script
-sudo bash /opt/kyc-aml-orchestrator/deploy/setup-gcp.sh
+sudo bash ~/kyc-aml-agentic-ai-orchestrator/deploy/setup-gcp.sh
 ```
 
 ### Step 3: Configure API Keys
 
 ```bash
 # Edit .env file with your API keys
-sudo nano /opt/kyc-aml-orchestrator/.env
+nano ~/kyc-aml-agentic-ai-orchestrator/.env
 
 # Required keys:
 # - GOOGLE_API_KEY (for Gemini LLM)
@@ -133,7 +134,7 @@ sudo tail -f /var/log/kyc-aml-orchestrator/error.log
 tail -f /var/log/kyc-aml-orchestrator/app.log
 
 # Application logs
-tail -f /opt/kyc-aml-orchestrator/logs/kyc_aml_orchestrator.log
+tail -f ~/kyc-aml-agentic-ai-orchestrator/logs/kyc_aml_orchestrator.log
 
 # Nginx logs
 tail -f /var/log/nginx/kyc-aml-access.log
@@ -143,13 +144,13 @@ tail -f /var/log/nginx/kyc-aml-error.log
 ### Updating the Application
 
 ```bash
-cd /opt/kyc-aml-orchestrator
+cd ~/kyc-aml-agentic-ai-orchestrator
 
 # Pull latest changes
-sudo git pull origin master
+git pull origin master
 
 # Update dependencies (if requirements.txt changed)
-sudo -u kycaml .venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt
 
 # Restart
 sudo supervisorctl restart kyc-aml-orchestrator
@@ -170,8 +171,8 @@ sudo supervisorctl tail kyc-aml-orchestrator stderr
 sudo netstat -tlnp | grep 8501
 
 # Try running manually to see errors
-cd /opt/kyc-aml-orchestrator
-sudo -u kycaml .venv/bin/streamlit run web_chat.py --server.port=8501
+cd ~/kyc-aml-agentic-ai-orchestrator
+.venv/bin/streamlit run web_chat.py --server.port=8501
 ```
 
 ### 502 Bad Gateway (Nginx)
@@ -185,10 +186,10 @@ sudo -u kycaml .venv/bin/streamlit run web_chat.py --server.port=8501
 
 ```bash
 # Fix ownership
-sudo chown -R kycaml:kycaml /opt/kyc-aml-orchestrator
+sudo chown -R g2023aa05111:g2023aa05111 ~/kyc-aml-agentic-ai-orchestrator
 
 # Fix permissions
-sudo chmod -R 755 /opt/kyc-aml-orchestrator
+chmod -R 755 ~/kyc-aml-agentic-ai-orchestrator
 ```
 
 ## Security Notes

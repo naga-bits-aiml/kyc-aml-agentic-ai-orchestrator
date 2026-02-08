@@ -27,8 +27,8 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 
 # Configuration
-APP_DIR="/opt/kyc-aml-orchestrator"
-APP_USER="kycaml"
+APP_DIR="/home/g2023aa05111/kyc-aml-agentic-ai-orchestrator"
+APP_USER="g2023aa05111"
 STREAMLIT_PORT=8501
 PYTHON_VERSION="3.11"
 
@@ -82,14 +82,14 @@ apt-get install -y -qq tesseract-ocr tesseract-ocr-eng poppler-utils
 echo -e "${GREEN}✅ Tesseract OCR installed${NC}"
 
 # =============================================================================
-# Step 4: Create application user
+# Step 4: Verify application user exists
 # =============================================================================
-echo -e "${YELLOW}👤 Step 4: Creating application user...${NC}"
+echo -e "${YELLOW}👤 Step 4: Verifying application user...${NC}"
 if id "$APP_USER" &>/dev/null; then
-    echo -e "${YELLOW}⚠️  User $APP_USER already exists${NC}"
+    echo -e "${GREEN}✅ User $APP_USER exists${NC}"
 else
-    useradd -r -s /bin/bash -d /opt/kyc-aml-orchestrator $APP_USER
-    echo -e "${GREEN}✅ User $APP_USER created${NC}"
+    echo -e "${RED}❌ User $APP_USER does not exist. Please create the user first or update APP_USER in this script.${NC}"
+    exit 1
 fi
 
 # =============================================================================
@@ -202,7 +202,7 @@ echo ""
 echo -e "${YELLOW}⚠️  IMPORTANT - Complete these steps:${NC}"
 echo ""
 echo "1️⃣  Edit .env with your API keys:"
-echo "   sudo nano $APP_DIR/.env"
+echo "   nano $APP_DIR/.env"
 echo ""
 echo "2️⃣  Restart after editing .env:"
 echo "   sudo supervisorctl restart kyc-aml-orchestrator"
