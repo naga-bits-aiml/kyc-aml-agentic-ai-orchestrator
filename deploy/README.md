@@ -114,24 +114,23 @@ gcloud compute firewall-rules create allow-streamlit-internal \
 
 ```bash
 # Check status
-sudo supervisorctl status kyc-aml-orchestrator
+supervisorctl status kyc-aml-orchestrator
 
 # Start/Stop/Restart
-sudo supervisorctl start kyc-aml-orchestrator
-sudo supervisorctl stop kyc-aml-orchestrator
-sudo supervisorctl restart kyc-aml-orchestrator
+supervisorctl start kyc-aml-orchestrator
+supervisorctl stop kyc-aml-orchestrator
+supervisorctl restart kyc-aml-orchestrator
 
-# View logs
-sudo supervisorctl tail -f kyc-aml-orchestrator
-sudo tail -f /var/log/kyc-aml-orchestrator/app.log
-sudo tail -f /var/log/kyc-aml-orchestrator/error.log
+# View live logs
+supervisorctl tail -f kyc-aml-orchestrator
 ```
 
 ### Application Logs
 
 ```bash
-# Supervisor logs
-tail -f /var/log/kyc-aml-orchestrator/app.log
+# Supervisor logs (in app directory)
+tail -f ~/kyc-aml-agentic-ai-orchestrator/logs/supervisor_app.log
+tail -f ~/kyc-aml-agentic-ai-orchestrator/logs/supervisor_error.log
 
 # Application logs
 tail -f ~/kyc-aml-agentic-ai-orchestrator/logs/kyc_aml_orchestrator.log
