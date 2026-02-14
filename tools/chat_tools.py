@@ -90,7 +90,7 @@ def create_chat_tools(chat_interface):
         documents = []
         for meta_file in metadata_files:
             try:
-                with open(meta_file, 'r') as f:
+                with open(meta_file, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 
                 # Apply filter if specified
@@ -202,7 +202,7 @@ def create_chat_tools(chat_interface):
         if not metadata_file.exists():
             return f"❌ Case metadata not found for {case_reference}."
         
-        with open(metadata_file, 'r') as f:
+        with open(metadata_file, 'r', encoding='utf-8') as f:
             case_meta = json.load(f)
         
         document_ids = case_meta.get('documents', [])
@@ -225,7 +225,7 @@ def create_chat_tools(chat_interface):
                 doc_meta_file = intake_dir / f"{doc_id}.metadata.json"
                 if doc_meta_file.exists():
                     try:
-                        with open(doc_meta_file, 'r') as f:
+                        with open(doc_meta_file, 'r', encoding='utf-8') as f:
                             doc_meta = json.load(f)
                         doc_type = doc_meta.get('classification', {}).get('document_type', 'unclassified')
                         conf = doc_meta.get('classification', {}).get('confidence', 0)
@@ -316,7 +316,7 @@ def create_chat_tools(chat_interface):
                 doc_meta_file = intake_dir / f"{doc_id}.metadata.json"
                 if doc_meta_file.exists():
                     try:
-                        with open(doc_meta_file, 'r') as f:
+                        with open(doc_meta_file, 'r', encoding='utf-8') as f:
                             doc_meta = json.load(f)
                         
                         doc_type = doc_meta.get('classification', {}).get('document_type', 'unknown')
@@ -421,7 +421,7 @@ def create_chat_tools(chat_interface):
             
             if metadata_file.exists():
                 try:
-                    with open(metadata_file, 'r') as f:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
                         metadata = json.load(f)
                     doc_display_name = document_id
                 except Exception as e:
@@ -456,7 +456,7 @@ def create_chat_tools(chat_interface):
                 return f"📄 Document: {document_id}\n⚠️  No metadata found - document may not have been processed yet."
             
             try:
-                with open(metadata_file, 'r') as f:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
             except Exception as e:
                 return f"❌ Error reading metadata: {str(e)}"
@@ -628,7 +628,7 @@ def create_chat_tools(chat_interface):
             # Check metadata files for matching document ID
             for metadata_file in case_dir.glob(".*metadata.json"):
                 try:
-                    with open(metadata_file, 'r') as f:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
                         metadata = json.load(f)
                     
                     doc_id = metadata.get('document_id', '')
@@ -666,7 +666,7 @@ def create_chat_tools(chat_interface):
             case_metadata_file = case_dir / "case_metadata.json"
             if case_metadata_file.exists():
                 try:
-                    with open(case_metadata_file, 'r') as f:
+                    with open(case_metadata_file, 'r', encoding='utf-8') as f:
                         case_meta = json.load(f)
                     
                     documents = case_meta.get('documents', [])
@@ -715,7 +715,7 @@ def create_chat_tools(chat_interface):
         if not case_metadata_file.exists():
             return f"❌ Case metadata not found for {case_ref}."
         
-        with open(case_metadata_file, 'r') as f:
+        with open(case_metadata_file, 'r', encoding='utf-8') as f:
             case_meta = json.load(f)
         
         document_ids = case_meta.get('documents', [])
@@ -739,7 +739,7 @@ def create_chat_tools(chat_interface):
                 continue
             
             try:
-                with open(doc_metadata_file, 'r') as f:
+                with open(doc_metadata_file, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 
                 doc_type = metadata.get('classification', {}).get('document_type', 'unknown')
@@ -891,7 +891,7 @@ def create_chat_tools(chat_interface):
         if not case_metadata_file.exists():
             return f"❌ Case metadata not found for {case_ref}."
         
-        with open(case_metadata_file, 'r') as f:
+        with open(case_metadata_file, 'r', encoding='utf-8') as f:
             case_meta = json.load(f)
         
         document_ids = case_meta.get('documents', [])
@@ -908,7 +908,7 @@ def create_chat_tools(chat_interface):
             
             if doc_metadata_file.exists():
                 try:
-                    with open(doc_metadata_file, 'r') as f:
+                    with open(doc_metadata_file, 'r', encoding='utf-8') as f:
                         metadata = json.load(f)
                     
                     doc_type = metadata.get('classification', {}).get('document_type', 'unknown')
@@ -1305,7 +1305,7 @@ Please summarize the following case data:
         
         try:
             # Load existing metadata
-            with open(metadata_file, 'r') as f:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
             
             # Track updates
@@ -1332,7 +1332,7 @@ Please summarize the following case data:
             metadata['last_updated'] = datetime.now().isoformat()
             
             # Save updated metadata
-            with open(metadata_file, 'w') as f:
+            with open(metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2)
             
             msg = f"✅ Updated metadata for '{filename}'\n"
@@ -1530,7 +1530,7 @@ Please summarize the following case data:
             # Classification if needed
             if classification_status != 'completed':
                 msg += "📋 Running ClassificationAgent...\n"
-                class_result = classify_document(stored_path)
+                class_result = classify_document.run(document_id=document_id)
                 
                 if class_result.get('success'):
                     doc_type = class_result.get('document_type')
@@ -1607,7 +1607,7 @@ Please summarize the following case data:
                 return f"❌ Document {document_id} not found."
             
             # Load metadata
-            with open(metadata_path, 'r') as f:
+            with open(metadata_path, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
             
             # Validate stage name
@@ -1649,7 +1649,7 @@ Please summarize the following case data:
             # Stage field is vestigial - status blocks handle progression
             
             # Save updated metadata
-            with open(metadata_path, 'w') as f:
+            with open(metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2)
             
             msg = f"✅ Stage reset successfully!\n\n"
@@ -1689,7 +1689,7 @@ Please summarize the following case data:
             if not case_metadata_path.exists():
                 return f"❌ Case {case_id} not found. Create case first."
             
-            with open(case_metadata_path, 'r') as f:
+            with open(case_metadata_path, 'r', encoding='utf-8') as f:
                 case_metadata = json.load(f)
             
             if "documents" not in case_metadata:
@@ -1701,7 +1701,7 @@ Please summarize the following case data:
             case_metadata["documents"].append(document_id)
             case_metadata["last_updated"] = datetime.now().isoformat()
             
-            with open(case_metadata_path, 'w') as f:
+            with open(case_metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(case_metadata, f, indent=2)
             
             logger.info(f"Linked document {document_id} to case {case_id}")
@@ -1780,7 +1780,7 @@ Please summarize the following case data:
             
             # Classification
             msg += "📋 Running ClassificationAgent...\n"
-            class_result = classify_document(file_path)
+            class_result = classify_document.run(document_id=doc_id)
             
             if class_result.get('success'):
                 doc_type = class_result.get('document_type')
@@ -1853,7 +1853,7 @@ Please summarize the following case data:
                 file_path = doc.get('stored_path')
                 
                 # Classification
-                class_result = classify_document(file_path)
+                class_result = classify_document.run(document_id=doc_id)
                 
                 if class_result.get('success'):
                     doc_type = class_result.get('document_type')

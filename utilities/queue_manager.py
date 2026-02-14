@@ -66,7 +66,7 @@ class DocumentQueue:
             Queue data with 'queue' and 'processed' lists
         """
         try:
-            with open(self.queue_file, 'r') as f:
+            with open(self.queue_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             # Ensure required keys exist
@@ -91,7 +91,7 @@ class DocumentQueue:
             data: Queue data to save
         """
         try:
-            with open(self.queue_file, 'w') as f:
+            with open(self.queue_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save queue: {e}")
@@ -231,7 +231,7 @@ class DocumentQueue:
             child_metadata = {}
             if metadata_path.exists():
                 try:
-                    with open(metadata_path, 'r') as f:
+                    with open(metadata_path, 'r', encoding='utf-8') as f:
                         child_metadata = json.load(f)
                 except Exception as e:
                     logger.warning(f"Failed to load child metadata: {e}")

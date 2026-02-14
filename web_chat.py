@@ -214,7 +214,7 @@ class WebChatInterface:
                 "description": "",
                 "documents": []
             }
-            with open(metadata_file, 'w') as f:
+            with open(metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2)
             
             return f"✅ Created new case: `{case_ref}`"
@@ -457,7 +457,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             metadata_file = case_dir / "case_metadata.json"
             if metadata_file.exists():
                 try:
-                    with open(metadata_file, 'r') as f:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
                         metadata = json.load(f)
                     doc_count = len(metadata.get('documents', []))
                     status = metadata.get('status', 'unknown')
@@ -494,7 +494,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         
         for meta_file in metadata_files:
             try:
-                with open(meta_file, 'r') as f:
+                with open(meta_file, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 
                 doc_id = metadata.get('document_id', 'unknown')
@@ -612,7 +612,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             metadata_file = case_dir / "case_metadata.json"
             if metadata_file.exists():
                 try:
-                    with open(metadata_file) as f:
+                    with open(metadata_file, encoding='utf-8') as f:
                         metadata = json.load(f)
                     cases.append(metadata)
                 except:
@@ -638,7 +638,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         if not metadata_file.exists():
             return None
         
-        with open(metadata_file) as f:
+        with open(metadata_file, encoding='utf-8') as f:
             return json.load(f)
     
     def get_documents(self, limit: int = 50) -> List[Dict[str, Any]]:
@@ -650,7 +650,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         documents = []
         for metadata_file in sorted(intake_dir.glob("*.metadata.json"), reverse=True)[:limit]:
             try:
-                with open(metadata_file) as f:
+                with open(metadata_file, encoding='utf-8') as f:
                     metadata = json.load(f)
                 documents.append(metadata)
             except:

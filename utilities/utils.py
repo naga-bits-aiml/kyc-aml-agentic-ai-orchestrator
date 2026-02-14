@@ -64,7 +64,7 @@ def load_ui_messages() -> Dict[str, Any]:
     config_path = Path(__file__).parent.parent / "config" / "ui_messages.json"
     
     if config_path.exists():
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     
     # Fallback defaults

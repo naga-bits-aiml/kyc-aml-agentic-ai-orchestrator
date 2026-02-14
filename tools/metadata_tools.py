@@ -51,7 +51,7 @@ def get_document_metadata(document_id: str) -> Dict[str, Any]:
         }
     
     try:
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
         return {
@@ -116,7 +116,7 @@ def update_processing_status(
         }
     
     try:
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
         # Update stage status
@@ -146,7 +146,7 @@ def update_processing_status(
         
         metadata["updated_at"] = datetime.now().isoformat()
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
         return {
@@ -195,7 +195,7 @@ def record_error(
         }
     
     try:
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
         if stage not in metadata:
@@ -214,7 +214,7 @@ def record_error(
         metadata["last_error"] = error_message
         metadata["updated_at"] = datetime.now().isoformat()
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
         return {
@@ -259,7 +259,7 @@ def check_retry_eligible(document_id: str, stage: str, max_retries: int = 3) -> 
         }
     
     try:
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
         stage_data = metadata.get(stage, {})
@@ -311,7 +311,7 @@ def reset_stage_for_retry(document_id: str, stage: str) -> Dict[str, Any]:
         }
     
     try:
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
         if stage not in metadata:
@@ -327,7 +327,7 @@ def reset_stage_for_retry(document_id: str, stage: str) -> Dict[str, Any]:
         
         metadata["updated_at"] = datetime.now().isoformat()
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
         return {
@@ -368,7 +368,7 @@ def flag_for_review(document_id: str, reason: str) -> Dict[str, Any]:
         }
     
     try:
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
         metadata["requires_review"] = True
@@ -376,7 +376,7 @@ def flag_for_review(document_id: str, reason: str) -> Dict[str, Any]:
         metadata["flagged_at"] = datetime.now().isoformat()
         metadata["updated_at"] = datetime.now().isoformat()
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
         return {
@@ -417,7 +417,7 @@ def get_processing_summary(document_id: str) -> Dict[str, Any]:
         }
     
     try:
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
         return {
@@ -477,7 +477,7 @@ def list_all_metadata() -> Dict[str, Any]:
     documents = []
     for metadata_file in intake_dir.glob("*.metadata.json"):
         try:
-            with open(metadata_file, 'r') as f:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
             
             documents.append({

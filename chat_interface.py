@@ -248,7 +248,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         if case_dir.exists() and metadata_file.exists():
             # Load existing case
             try:
-                with open(metadata_file, 'r') as f:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 doc_count = len(metadata.get('documents', []))
                 return f"✅ Loaded existing case: {self.case_reference}\n   📁 {doc_count} documents linked"
@@ -270,7 +270,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
                 "last_updated": datetime.now().isoformat()
             }
             
-            with open(metadata_file, 'w') as f:
+            with open(metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2)
             
             self.logger.info(f"Created new case with metadata: {self.case_reference}")
@@ -556,7 +556,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             metadata_file = case_dir / "case_metadata.json"
             if metadata_file.exists():
                 try:
-                    with open(metadata_file, 'r') as f:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
                         metadata = json.load(f)
                     doc_count = len(metadata.get('documents', []))
                     status = metadata.get('status', 'unknown')
@@ -596,7 +596,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         
         for meta_file in metadata_files:
             try:
-                with open(meta_file, 'r') as f:
+                with open(meta_file, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 
                 doc_id = metadata.get('document_id', 'unknown')
@@ -657,7 +657,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         metadata_file = case_dir / "case_metadata.json"
         if metadata_file.exists():
             try:
-                with open(metadata_file, 'r') as f:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 doc_count = len(metadata.get('documents', []))
                 status = metadata.get('status', 'unknown')
@@ -916,7 +916,8 @@ def main():
                 break  # Normal exit
                 
         except Exception as e:
-            print(f"\n❌ Fatal error: {str(e)}")
+            logger.error(f"Fatal error: {str(e)}")
+            logger.exception("Error traceback:")
             return 1
     
     return 0

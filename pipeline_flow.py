@@ -541,7 +541,7 @@ def run_pipeline_sync(input_path: str, case_reference: str = None) -> Dict[str, 
                 "status": "active",
                 "documents": []
             }
-            with open(case_metadata_path, 'w') as f:
+            with open(case_metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(case_metadata, f, indent=2)
             logger.info(f"Auto-created case {case_reference} for document linking")
         

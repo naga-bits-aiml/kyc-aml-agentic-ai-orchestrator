@@ -74,7 +74,7 @@ def _validate_and_store_document(file_path: str, intake_dir: Path) -> Dict[str, 
             if metadata_path.exists():
                 logger.info(f"♻️ Found existing document by filename: {stem}")
                 try:
-                    with open(metadata_path, 'r') as f:
+                    with open(metadata_path, 'r', encoding='utf-8') as f:
                         existing_metadata = json.load(f)
                     return {
                         "success": True,
@@ -91,7 +91,7 @@ def _validate_and_store_document(file_path: str, intake_dir: Path) -> Dict[str, 
     # Method 2: Check for existing document by stored_path
     for metadata_file in intake_dir.glob("*.metadata.json"):
         try:
-            with open(metadata_file, 'r') as f:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
                 existing_metadata = json.load(f)
             
             stored_path_in_metadata = Path(existing_metadata.get("stored_path", "")).resolve()
@@ -113,7 +113,7 @@ def _validate_and_store_document(file_path: str, intake_dir: Path) -> Dict[str, 
     # Method 3: Check for existing document by original filename
     for metadata_file in intake_dir.glob("*.metadata.json"):
         try:
-            with open(metadata_file, 'r') as f:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
                 existing_metadata = json.load(f)
             
             if existing_metadata.get("original_filename") == path.name:
@@ -220,7 +220,7 @@ def _validate_and_store_document(file_path: str, intake_dir: Path) -> Dict[str, 
         
         # Save metadata file
         metadata_path = intake_dir / f"{document_id}.metadata.json"
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
         logger.info(f"Document stored successfully with ID: {document_id}")
@@ -253,7 +253,7 @@ def _find_document_metadata(document_id: str) -> Optional[Dict[str, Any]]:
         metadata_path = Path(settings.documents_dir) / stage / f"{document_id}.metadata.json"
         if metadata_path.exists():
             try:
-                with open(metadata_path, 'r') as f:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except Exception as e:
                 logger.error(f"Error reading metadata for {document_id}: {e}")
@@ -439,7 +439,7 @@ def get_document_by_id_tool(document_id: str) -> Dict[str, Any]:
         for stage in stages:
             metadata_path = Path(settings.documents_dir) / stage / f"{document_id}.metadata.json"
             if metadata_path.exists():
-                with open(metadata_path, 'r') as f:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 
                 return {
@@ -582,7 +582,7 @@ def list_all_documents_tool(stage: Optional[str] = None, page: int = 1, limit: i
                 continue
             
             for metadata_file in sorted(stage_dir.glob("*.metadata.json"), reverse=True):
-                with open(metadata_file, 'r') as f:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 
                 all_documents.append({
@@ -720,7 +720,7 @@ def update_document_metadata_tool(document_id: str, updates: Dict[str, Any]) -> 
         for stage in stages:
             metadata_path = Path(settings.documents_dir) / stage / f"{document_id}.metadata.json"
             if metadata_path.exists():
-                with open(metadata_path, 'r') as f:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 
                 # Apply updates
@@ -732,7 +732,7 @@ def update_document_metadata_tool(document_id: str, updates: Dict[str, Any]) -> 
                 
                 metadata['last_updated'] = datetime.now().isoformat()
                 
-                with open(metadata_path, 'w') as f:
+                with open(metadata_path, 'w', encoding='utf-8') as f:
                     json.dump(metadata, f, indent=2)
                 
                 return {
@@ -783,7 +783,7 @@ def delete_document_tool(document_id: str, force: bool = False) -> Dict[str, Any
             metadata_path = stage_dir / f"{document_id}.metadata.json"
             
             if metadata_path.exists():
-                with open(metadata_path, 'r') as f:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 
                 # Check if linked to cases

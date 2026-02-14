@@ -71,7 +71,7 @@ def convert_pdf_to_images_tool(document_id: str, max_pages: int = 10) -> Dict[st
             }
         
         # Load source document metadata
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             source_metadata = json.load(f)
         
         pdf_path = Path(source_metadata['stored_path'])
@@ -183,7 +183,7 @@ def convert_pdf_to_images_tool(document_id: str, max_pages: int = 10) -> Dict[st
             
             # Save image metadata
             image_metadata_path = intake_dir / f"{image_doc_id}.metadata.json"
-            with open(image_metadata_path, 'w') as f:
+            with open(image_metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(image_metadata, f, indent=2)
             
             converted_images.append({
@@ -202,7 +202,7 @@ def convert_pdf_to_images_tool(document_id: str, max_pages: int = 10) -> Dict[st
         source_metadata["conversion_timestamp"] = datetime.now().isoformat()
         source_metadata["total_pages_converted"] = len(converted_images)
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(source_metadata, f, indent=2)
         
         # Log file generation with ALL details
@@ -279,7 +279,7 @@ def check_pdf_conversion_needed_tool(document_id: str) -> Dict[str, Any]:
             }
         
         # Load metadata
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
         is_pdf = metadata.get("extension", "").lower() == ".pdf"

@@ -255,7 +255,7 @@ Examples:
         # Save to file if specified
         if args.output:
             output_path = Path(args.output)
-            with open(output_path, 'w') as f:
+            with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(results, f, indent=2, default=str)
             print(f"\n💾 Results saved to: {output_path}")
         

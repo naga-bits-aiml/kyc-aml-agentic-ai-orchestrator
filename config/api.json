@@ -1,7 +1,7 @@
 {
   "api": {
     "classifier": {
-      "base_url": "http://34.66.71.193//api/kyc_document_classifier/v1",
+      "base_url": "http://34.9.208.193/api/kyc_document_classifier/v1",
       "api_key": "${CLASSIFIER_API_KEY:}",
       "timeout": 30,
       "max_retries": 1,

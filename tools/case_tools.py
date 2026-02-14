@@ -29,7 +29,7 @@ def _find_document_metadata(doc_id: str) -> Optional[Dict[str, Any]]:
     metadata_path = Path(settings.documents_dir) / "intake" / f"{doc_id}.metadata.json"
     if metadata_path.exists():
         try:
-            with open(metadata_path, 'r') as f:
+            with open(metadata_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             logger.error(f"Error reading metadata for {doc_id}: {e}")
@@ -173,7 +173,7 @@ def create_case_tool(case_id: str, description: str = "", case_type: str = "kyc"
         }
         
         metadata_path = case_dir / "case_metadata.json"
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(case_metadata, f, indent=2)
         
         logger.info(f"Created case: {case_id}")
@@ -221,7 +221,7 @@ def get_case_tool(case_id: str) -> Dict[str, Any]:
                 "error": f"Case {case_id} not found"
             }
         
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             case_metadata = json.load(f)
         
         return {
@@ -272,7 +272,7 @@ def list_cases_tool(status: Optional[str] = None, limit: int = 50) -> Dict[str, 
                 continue
             
             try:
-                with open(metadata_path, 'r') as f:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
                     case_metadata = json.load(f)
                 
                 # Apply status filter
@@ -340,7 +340,7 @@ def list_documents_by_case_tool(case_id: str) -> Dict[str, Any]:
                 "total": 0
             }
         
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             case_metadata = json.load(f)
         
         document_ids = case_metadata.get('documents', [])
@@ -409,7 +409,7 @@ def update_case_tool(case_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
                 "error": f"Case {case_id} not found"
             }
         
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             case_metadata = json.load(f)
         
         # Apply updates (don't allow overwriting core fields)
@@ -420,7 +420,7 @@ def update_case_tool(case_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         
         case_metadata['last_updated'] = datetime.now().isoformat()
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(case_metadata, f, indent=2)
         
         return {
@@ -492,7 +492,7 @@ def link_document_to_case_tool(document_id: str, case_id: str) -> Dict[str, Any]
                 "error": f"Case {case_id} not found"
             }
         
-        with open(case_metadata_path, 'r') as f:
+        with open(case_metadata_path, 'r', encoding='utf-8') as f:
             case_metadata = json.load(f)
         
         if "documents" not in case_metadata:
@@ -502,7 +502,7 @@ def link_document_to_case_tool(document_id: str, case_id: str) -> Dict[str, Any]
             case_metadata["documents"].append(document_id)
             case_metadata["last_updated"] = datetime.now().isoformat()
             
-            with open(case_metadata_path, 'w') as f:
+            with open(case_metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(case_metadata, f, indent=2)
             
             logger.info(f"Linked document {document_id} to case {case_id}")
@@ -563,7 +563,7 @@ def unlink_document_from_case_tool(document_id: str, case_id: str) -> Dict[str, 
                 "error": f"Case {case_id} not found"
             }
         
-        with open(case_metadata_path, 'r') as f:
+        with open(case_metadata_path, 'r', encoding='utf-8') as f:
             case_metadata = json.load(f)
         
         documents = case_metadata.get("documents", [])
@@ -573,7 +573,7 @@ def unlink_document_from_case_tool(document_id: str, case_id: str) -> Dict[str, 
             case_metadata["documents"] = documents
             case_metadata["last_updated"] = datetime.now().isoformat()
             
-            with open(case_metadata_path, 'w') as f:
+            with open(case_metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(case_metadata, f, indent=2)
             
             return {
@@ -630,7 +630,7 @@ def delete_case_tool(case_id: str, force: bool = False) -> Dict[str, Any]:
         # Check for linked documents
         metadata_path = case_dir / "case_metadata.json"
         if metadata_path.exists():
-            with open(metadata_path, 'r') as f:
+            with open(metadata_path, 'r', encoding='utf-8') as f:
                 case_metadata = json.load(f)
             
             documents = case_metadata.get('documents', [])
@@ -691,7 +691,7 @@ def generate_case_summary_tool(case_id: str) -> Dict[str, Any]:
                 "error": f"Case {case_id} not found"
             }
         
-        with open(case_metadata_path, 'r') as f:
+        with open(case_metadata_path, 'r', encoding='utf-8') as f:
             case_metadata = json.load(f)
         
         document_ids = case_metadata.get('documents', [])
@@ -837,13 +837,13 @@ def update_case_summary_tool(case_id: str, case_summary: Dict[str, Any]) -> Dict
         if not case_metadata_path.exists():
             return {"success": False, "error": f"Case {case_id} not found"}
         
-        with open(case_metadata_path, 'r') as f:
+        with open(case_metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
         metadata['case_summary'] = case_summary
         metadata['last_updated'] = datetime.now().isoformat()
         
-        with open(case_metadata_path, 'w') as f:
+        with open(case_metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
         logger.info(f"Updated case summary for {case_id}")
@@ -885,7 +885,7 @@ def generate_comprehensive_case_summary_tool(case_id: str) -> Dict[str, Any]:
         if not case_metadata_path.exists():
             return {"success": False, "error": f"Case {case_id} not found"}
         
-        with open(case_metadata_path, 'r') as f:
+        with open(case_metadata_path, 'r', encoding='utf-8') as f:
             case_metadata = json.load(f)
         
         document_ids = case_metadata.get('documents', [])
@@ -985,7 +985,7 @@ JSON OUTPUT:"""
         case_metadata['case_summary'] = llm_summary
         case_metadata['last_updated'] = datetime.now().isoformat()
         
-        with open(case_metadata_path, 'w') as f:
+        with open(case_metadata_path, 'w', encoding='utf-8') as f:
             json.dump(case_metadata, f, indent=2)
         
         return {

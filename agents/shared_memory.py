@@ -41,7 +41,7 @@ class SharedMemory:
         
         if self.metadata_path.exists():
             try:
-                with open(self.metadata_path, 'r') as f:
+                with open(self.metadata_path, 'r', encoding='utf-8') as f:
                     saved_data = json.load(f)
                     self.data = saved_data.get('data', {})
                     self.workflow_state = saved_data.get('workflow_state', self.workflow_state)
@@ -67,7 +67,7 @@ class SharedMemory:
                 'agent_messages': self.agent_messages[-50:]  # Keep last 50 messages
             }
             
-            with open(self.metadata_path, 'w') as f:
+            with open(self.metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(data_to_save, f, indent=2, default=str)
             
             logger.debug(f"Saved workflow memory for case {self.case_reference}")

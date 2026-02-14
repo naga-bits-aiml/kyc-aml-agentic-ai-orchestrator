@@ -31,7 +31,7 @@ def _load_config() -> Dict[str, Any]:
     """Load supervisor configuration from YAML."""
     config_path = Path(__file__).parent.parent / "config" / "supervisor_agent.yaml"
     try:
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
         agent_config = config.get('agent', {})
         return {

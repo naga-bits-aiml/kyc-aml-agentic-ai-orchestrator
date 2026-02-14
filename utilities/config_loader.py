@@ -60,7 +60,7 @@ class ConfigLoader:
         
         # Merge all JSON files
         for json_file in json_files:
-            with open(json_file, 'r') as f:
+            with open(json_file, 'r', encoding='utf-8') as f:
                 file_config = json.load(f)
                 self._merge_config(self._config, file_config)
         

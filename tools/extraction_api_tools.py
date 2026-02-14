@@ -604,7 +604,7 @@ def extract_document_data(document_id: str, document_type: Optional[str] = None)
             "error": f"Metadata not found for document: {document_id}"
         }
     
-    with open(metadata_path, 'r') as f:
+    with open(metadata_path, 'r', encoding='utf-8') as f:
         metadata = json.load(f)
     
     # Get document file path
@@ -625,7 +625,7 @@ def extract_document_data(document_id: str, document_type: Optional[str] = None)
     metadata["extraction"]["status"] = "processing"
     metadata["extraction"]["started_at"] = datetime.now().isoformat()
     metadata["updated_at"] = datetime.now().isoformat()
-    with open(metadata_path, 'w') as f:
+    with open(metadata_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
     
     # Get API configuration
@@ -668,7 +668,7 @@ def extract_document_data(document_id: str, document_type: Optional[str] = None)
         raw_response = result.get("raw_response", {})
         if raw_response:
             raw_response_path = intake_dir / f"{document_id}.vision_response.json"
-            with open(raw_response_path, 'w') as f:
+            with open(raw_response_path, 'w', encoding='utf-8') as f:
                 json.dump(raw_response, f, indent=2)
             logger.debug(f"Stored Vision API response: {raw_response_path}")
         
@@ -684,7 +684,7 @@ def extract_document_data(document_id: str, document_type: Optional[str] = None)
         metadata["extraction"]["duration_seconds"] = result.get("duration_seconds")
         metadata["processing_status"] = "completed"
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
         return {
@@ -705,7 +705,7 @@ def extract_document_data(document_id: str, document_type: Optional[str] = None)
         metadata["last_error"] = result["error"]
         metadata["processing_status"] = "failed"
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
         return {
@@ -738,7 +738,7 @@ def get_extraction_result(document_id: str) -> Dict[str, Any]:
             "error": f"Metadata not found for document: {document_id}"
         }
     
-    with open(metadata_path, 'r') as f:
+    with open(metadata_path, 'r', encoding='utf-8') as f:
         metadata = json.load(f)
     
     extraction = metadata.get("extraction", {})
@@ -780,7 +780,7 @@ def get_vision_api_response(document_id: str) -> Dict[str, Any]:
             "error": f"Vision response not found: {response_path.name}"
         }
     
-    with open(response_path, 'r') as f:
+    with open(response_path, 'r', encoding='utf-8') as f:
         response = json.load(f)
     
     return {

@@ -213,7 +213,7 @@ def classify_document(document_id: str) -> Dict[str, Any]:
             "error": f"Metadata not found for document: {document_id}"
         }
     
-    with open(metadata_path, 'r') as f:
+    with open(metadata_path, 'r', encoding='utf-8') as f:
         metadata = json.load(f)
     
     # Get document file path
@@ -231,7 +231,7 @@ def classify_document(document_id: str) -> Dict[str, Any]:
     metadata["classification"]["status"] = "processing"
     metadata["classification"]["started_at"] = datetime.now().isoformat()
     metadata["updated_at"] = datetime.now().isoformat()
-    with open(metadata_path, 'w') as f:
+    with open(metadata_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
     
     # Get API configuration
@@ -300,7 +300,7 @@ def classify_document(document_id: str) -> Dict[str, Any]:
             f"{document_type} (confidence: {confidence:.2%})" if confidence else f"{document_type}"
         )
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
         return {
@@ -317,7 +317,7 @@ def classify_document(document_id: str) -> Dict[str, Any]:
         metadata["classification"]["error"] = result["error"]
         metadata["last_error"] = result["error"]
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
         
         return {
@@ -351,7 +351,7 @@ def get_classification_result(document_id: str) -> Dict[str, Any]:
             "error": f"Metadata not found for document: {document_id}"
         }
     
-    with open(metadata_path, 'r') as f:
+    with open(metadata_path, 'r', encoding='utf-8') as f:
         metadata = json.load(f)
     
     classification = metadata.get("classification", {})

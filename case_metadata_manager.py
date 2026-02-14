@@ -46,14 +46,14 @@ class CaseMetadataManager:
     def load_metadata(self) -> Dict[str, Any]:
         """Load case metadata from file."""
         if self.metadata_file.exists():
-            with open(self.metadata_file, 'r') as f:
+            with open(self.metadata_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         return self._create_empty_metadata()
     
     def save_metadata(self, metadata: Dict[str, Any]) -> None:
         """Save case metadata to file."""
         self.ensure_exists()
-        with open(self.metadata_file, 'w') as f:
+        with open(self.metadata_file, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
     
     def _create_empty_metadata(self) -> Dict[str, Any]:

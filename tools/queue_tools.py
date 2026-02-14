@@ -170,7 +170,7 @@ def create_metadata_file(
     
     # Save metadata file
     metadata_path = intake_dir / f"{document_id}.metadata.json"
-    with open(metadata_path, 'w') as f:
+    with open(metadata_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
     
     logger.info(f"Created metadata file: {metadata_path}")
@@ -414,7 +414,7 @@ def split_pdf_to_images(pdf_path: str, max_pages: int = 50) -> Dict[str, Any]:
         
         # Save updated parent metadata
         parent_metadata_path = intake_dir / f"{parent_id}.metadata.json"
-        with open(parent_metadata_path, 'w') as f:
+        with open(parent_metadata_path, 'w', encoding='utf-8') as f:
             json.dump(parent_metadata, f, indent=2)
         
         return {
@@ -504,7 +504,7 @@ def build_processing_queue(file_paths: List[str]) -> Dict[str, Any]:
         "processed": [],
         "failed": []
     }
-    with open(queue_file, 'w') as f:
+    with open(queue_file, 'w', encoding='utf-8') as f:
         json.dump(queue_data, f, indent=2)
     
     message = f"Queued {len(queue)} documents"
@@ -547,7 +547,7 @@ def get_next_from_queue() -> Dict[str, Any]:
             "message": "No queue file found"
         }
     
-    with open(queue_file, 'r') as f:
+    with open(queue_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
     queue = data.get("queue", [])
@@ -568,18 +568,18 @@ def get_next_from_queue() -> Dict[str, Any]:
     metadata_path = intake_dir / f"{doc_id}.metadata.json"
     
     if metadata_path.exists():
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         metadata["queue"]["status"] = "processing"
         metadata["queue"]["started_at"] = datetime.now().isoformat()
         metadata["processing_status"] = "processing"
         metadata["updated_at"] = datetime.now().isoformat()
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
     
     # Save updated queue
     data["queue"] = queue
-    with open(queue_file, 'w') as f:
+    with open(queue_file, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2)
     
     return {
@@ -609,7 +609,7 @@ def get_queue_status() -> Dict[str, Any]:
             "message": "No queue file found"
         }
     
-    with open(queue_file, 'r') as f:
+    with open(queue_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
     return {
@@ -643,7 +643,7 @@ def mark_document_processed(document_id: str, success: bool = True, error: Optio
     
     # Update queue file
     if queue_file.exists():
-        with open(queue_file, 'r') as f:
+        with open(queue_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
         if success:
@@ -655,13 +655,13 @@ def mark_document_processed(document_id: str, success: bool = True, error: Optio
                 data["failed"] = []
             data["failed"].append({"document_id": document_id, "error": error})
         
-        with open(queue_file, 'w') as f:
+        with open(queue_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
     
     # Update metadata
     metadata_path = intake_dir / f"{document_id}.metadata.json"
     if metadata_path.exists():
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
         metadata["queue"]["status"] = "completed" if success else "failed"
@@ -671,7 +671,7 @@ def mark_document_processed(document_id: str, success: bool = True, error: Optio
         metadata["processing_status"] = "completed" if success else "failed"
         metadata["updated_at"] = datetime.now().isoformat()
         
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
     
     return {
