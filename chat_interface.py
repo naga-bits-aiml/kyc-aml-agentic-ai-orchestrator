@@ -809,6 +809,28 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
                 msg += f"📝 SUMMARY:\n"
                 msg += f"   {summary.get('summary')}\n\n"
             
+            # Discrepancies
+            discrepancies = summary.get('discrepancies', [])
+            if discrepancies:
+                msg += f"⚠️  DISCREPANCIES:\n"
+                for disc in discrepancies:
+                    if isinstance(disc, str):
+                        msg += f"   • {disc}\n"
+                    elif isinstance(disc, dict):
+                        msg += f"   • {disc.get('issue', disc)}\n"
+                msg += "\n"
+            
+            # Recommendations
+            recommendations = summary.get('recommendations', [])
+            if recommendations:
+                msg += f"💡 RECOMMENDATIONS:\n"
+                for rec in recommendations:
+                    if isinstance(rec, str):
+                        msg += f"   • {rec}\n"
+                    elif isinstance(rec, dict):
+                        msg += f"   • {rec.get('action', rec)}\n"
+                msg += "\n"
+            
             msg += f"📄 Documents analyzed: {summary.get('document_count', 0)}\n"
             msg += "💡 Case metadata updated!\n"
             return msg

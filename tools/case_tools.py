@@ -948,7 +948,9 @@ Return a JSON object with:
 - persons: [{{name, role, pan_number, etc.}}]
 - companies: [{{name, cin, registered_address, etc.}}]
 - kyc_verification: {{identity_verified, address_verified, missing_documents}}
-- summary: Brief narrative
+- summary: Brief narrative 
+- discrepancies: List any inconsistencies or issues found across documents
+- recommendations: Suggested actions based on KYC analysis
 
 JSON OUTPUT:"""
             
