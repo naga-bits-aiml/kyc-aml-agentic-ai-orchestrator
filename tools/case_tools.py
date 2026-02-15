@@ -945,37 +945,111 @@ DOCUMENT DATA:
 
 Return a JSON object with:
 - primary_entity: {{entity_type, name, description}}
-- persons: [{{name, role, pan_number, etc.}}]
-- companies: [{{name, cin, registered_address, etc.}}]
-- kyc_verification: {{identity_verified, address_verified, missing_documents}}
+- persons: [{{name, role, pan_number, date_of_birth, address, mobile, email}}]
+- companies: [{{name, cin, registered_address, incorporation_date}}]
+- kyc_agencies: [{{name, agency_type (government/bank/utility/other), documents_issued: [list of doc types]}}] - Organizations that issued the identity documents (e.g., UIDAI for Aadhar, Income Tax Dept for PAN, Passport Authority, RTO for Driving License, Banks, Utility companies)
+- kyc_verification: {{identity_verified: bool, address_verified: bool, company_verified: bool, missing_documents: [list], missing_information: [list]}}
 - summary: Brief narrative 
-- discrepancies: List any inconsistencies or issues found across documents
-- recommendations: Suggested actions based on KYC analysis
+- discrepancies: [{{entity, field, values: [conflicting values with doc refs], severity (Critical/High/Medium/Low), notes}}]
+- recommendations: [{{action, priority (High/Medium/Low), reason}}]
 
 JSON OUTPUT:"""
             
             response = llm.invoke(prompt)
             response_text = response.content if hasattr(response, 'content') else str(response)
             
-            # Clean up response
+            # Clean up response - robust JSON extraction
             response_text = response_text.strip()
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.startswith("```"):
-                response_text = response_text[3:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
+            
+            # Remove markdown code blocks
+            if "```json" in response_text:
+                start = response_text.find("```json") + 7
+                end = response_text.find("```", start)
+                if end > start:
+                    response_text = response_text[start:end]
+            elif "```" in response_text:
+                start = response_text.find("```") + 3
+                end = response_text.find("```", start)
+                if end > start:
+                    response_text = response_text[start:end]
+            
+            # Find JSON object boundaries
+            response_text = response_text.strip()
+            if not response_text.startswith("{"):
+                start_idx = response_text.find("{")
+                if start_idx != -1:
+                    response_text = response_text[start_idx:]
+            
+            # Find matching closing brace
+            brace_count = 0
+            end_idx = 0
+            for i, char in enumerate(response_text):
+                if char == "{":
+                    brace_count += 1
+                elif char == "}":
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = i + 1
+                        break
+            
+            if end_idx > 0:
+                response_text = response_text[:end_idx]
+            
+            # Fix common JSON issues
+            response_text = response_text.replace('\n', ' ')
+            response_text = response_text.replace('\r', ' ')
+            # Fix unescaped quotes in strings (common LLM issue)
+            import re
+            # Remove control characters
+            response_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', response_text)
             
             llm_summary = json.loads(response_text.strip())
             
+        except json.JSONDecodeError as je:
+            logger.warning(f"LLM JSON parsing failed: {je}")
+            # Try one more time with a simpler approach
+            try:
+                # Attempt to extract just the essential fields
+                import re
+                response_text_backup = response.content if hasattr(response, 'content') else str(response)
+                # Look for summary field
+                summary_match = re.search(r'"summary"\s*:\s*"([^"]*)"', response_text_backup)
+                summary_text = summary_match.group(1) if summary_match else "Summary extraction failed"
+                
+                llm_summary = {
+                    "primary_entity": {"entity_type": "unknown", "name": "See documents"},
+                    "persons": [],
+                    "companies": [],
+                    "kyc_agencies": [],
+                    "kyc_verification": {"identity_verified": False, "address_verified": False},
+                    "summary": summary_text,
+                    "discrepancies": [],
+                    "recommendations": [],
+                    "parse_error": str(je)
+                }
+            except:
+                llm_summary = {
+                    "primary_entity": {"entity_type": "unknown", "name": "Unknown"},
+                    "persons": [],
+                    "companies": [],
+                    "kyc_agencies": [],
+                    "kyc_verification": {"identity_verified": False, "address_verified": False},
+                    "summary": "LLM response could not be parsed",
+                    "discrepancies": [],
+                    "recommendations": [],
+                    "error": str(je)
+                }
         except Exception as e:
             logger.warning(f"LLM summarization failed: {e}")
             llm_summary = {
                 "primary_entity": {"entity_type": "unknown", "name": "Unknown"},
                 "persons": [],
                 "companies": [],
+                "kyc_agencies": [],
                 "kyc_verification": {"identity_verified": False, "address_verified": False},
                 "summary": "LLM summarization failed",
+                "discrepancies": [],
+                "recommendations": [],
                 "error": str(e)
             }
         
@@ -997,4 +1071,77 @@ JSON OUTPUT:"""
         
     except Exception as e:
         logger.error(f"Error generating comprehensive case summary: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@tool("format_case_summary_for_display")
+def format_case_summary_for_display_tool(case_id: str) -> Dict[str, Any]:
+    """
+    Step 2: Format stored case summary for display using LLM.
+    Takes the JSON case_summary from metadata and formats it as readable markdown.
+    
+    Args:
+        case_id: The case ID to format summary for
+        
+    Returns:
+        Dict with formatted_summary (markdown string)
+    """
+    try:
+        case_id = case_id.upper()
+        case_dir = Path(settings.documents_dir) / "cases" / case_id
+        case_metadata_path = case_dir / "case_metadata.json"
+        
+        if not case_metadata_path.exists():
+            return {"success": False, "error": f"Case {case_id} not found"}
+        
+        with open(case_metadata_path, 'r', encoding='utf-8') as f:
+            case_metadata = json.load(f)
+        
+        case_summary = case_metadata.get('case_summary', {})
+        if not case_summary:
+            return {"success": False, "error": "No case summary found. Run 'summarize case' first."}
+        
+        # Get LLM
+        from utilities.llm_factory import create_llm
+        llm = create_llm()
+        
+        format_prompt = f"""Format the following KYC case summary as a well-structured, readable report.
+
+CASE SUMMARY DATA:
+{json.dumps(case_summary, indent=2)}
+
+FORMAT GUIDELINES:
+- Use clear section headers with emojis
+- Use bullet points for lists
+- Highlight critical issues with ⚠️ or 🔴
+- Use ✅ for verified items, ❌ for missing/failed items
+- Group related information logically
+- Keep it concise but comprehensive
+- For discrepancies, clearly show severity with colors: 🔴 Critical, 🟠 High, 🟡 Medium
+- For recommendations, show priority levels
+
+SECTIONS TO INCLUDE:
+1. 🏢 Primary Entity & Overview
+2. 👥 Persons (with their details: PAN, DOB, Address, Mobile)
+3. 🏦 KYC Agencies (who issued the documents)
+4. 📋 KYC Verification Status (what's verified, what's missing)
+5. ⚠️ Discrepancies (if any, grouped by severity)
+6. 💡 Recommendations (if any, with priorities)
+7. 📝 Summary narrative
+8. 📄 Document count
+
+OUTPUT (formatted markdown):"""
+
+        response = llm.invoke(format_prompt)
+        formatted = response.content if hasattr(response, 'content') else str(response)
+        
+        return {
+            "success": True,
+            "case_id": case_id,
+            "formatted_summary": formatted.strip(),
+            "document_count": case_summary.get('document_count', 0)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error formatting case summary: {e}", exc_info=True)
         return {"success": False, "error": str(e)}

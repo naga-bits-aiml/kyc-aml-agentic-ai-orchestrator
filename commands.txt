@@ -1,1 +1,2 @@
 .\.venv\Scripts\Activate.ps1
+& "C:/Users/Lenovo/OneDrive - wilp.bits-pilani.ac.in/Documents/AIML/kyc-aml-agentic-ai-orchestrator/.venv/Scripts/python.exe" "c:/Users/Lenovo/OneDrive - wilp.bits-pilani.ac.in/Documents/AIML/kyc-aml-agentic-ai-orchestrator/chat_interface.py"

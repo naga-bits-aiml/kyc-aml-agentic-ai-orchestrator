@@ -571,59 +571,34 @@ class SupervisorAgent:
         return "\n".join(lines)
     
     def _format_case_summary(self, summary: Dict[str, Any]) -> str:
-        """Format full case summary for display."""
-        lines = ["📊 **Case Summary:**", ""]
+        """Format full case summary for display using LLM (two-step approach)."""
+        case_id = summary.get("case_summary", {}).get("case_id", "")
         
+        if case_id:
+            # Use LLM-based formatting (Step 2)
+            try:
+                from tools.case_tools import format_case_summary_for_display_tool
+                result = format_case_summary_for_display_tool.run(case_id)
+                if result.get("success"):
+                    return "📊 **Case Summary:**\n\n" + result.get("formatted_summary", "")
+            except Exception as e:
+                logger.warning(f"LLM formatting failed, using fallback: {e}")
+        
+        # Fallback to simple formatting
+        lines = ["📊 **Case Summary:**", ""]
         case_summary = summary.get("case_summary", {})
+        
         if isinstance(case_summary, dict):
-            # Primary entity
             primary = case_summary.get("primary_entity", {})
             if primary:
                 lines.append(f"**Primary Entity:** {primary.get('name', 'Unknown')} ({primary.get('entity_type', 'unknown')})")
-                lines.append("")
             
-            # Persons
-            persons = case_summary.get("persons", [])
-            if persons:
-                lines.append("**Persons Identified:**")
-                for person in persons:
-                    name = person.get("name", "Unknown")
-                    pan = person.get("pan_number", "")
-                    dob = person.get("dob", "")
-                    details = []
-                    if pan:
-                        details.append(f"PAN: {pan}")
-                    if dob:
-                        details.append(f"DOB: {dob}")
-                    lines.append(f"   • {name}" + (f" ({', '.join(details)})" if details else ""))
-                lines.append("")
-            
-            # Organizations
-            orgs = case_summary.get("organizations", [])
-            if orgs:
-                lines.append("**Organizations:**")
-                for org in orgs:
-                    lines.append(f"   • {org.get('name', 'Unknown')}")
-                lines.append("")
-            
-            # KYC Verification Status
-            kyc = case_summary.get("kyc_verification", {})
-            if kyc:
-                identity = "✅ Verified" if kyc.get("identity_verified") else "❌ Not Verified"
-                lines.append(f"**KYC Status:** Identity {identity}")
-                missing = kyc.get("missing_documents", [])
-                if missing:
-                    lines.append(f"   Missing: {', '.join(missing)}")
-                lines.append("")
-            
-            # Narrative summary
             narrative = case_summary.get("summary", "")
             if narrative:
-                lines.append("**Summary:**")
-                lines.append(f"   {narrative}")
+                lines.append("")
+                lines.append(f"**Summary:** {narrative}")
         
-        # Document count
-        doc_count = summary.get("document_count", 0)
+        doc_count = summary.get("document_count", case_summary.get("document_count", 0))
         lines.append("")
         lines.append(f"**Documents Processed:** {doc_count}")
         

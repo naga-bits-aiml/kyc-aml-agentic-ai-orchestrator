@@ -683,8 +683,12 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         return f"✅ Selected case: {case_id}"
     
     def _summarize_case(self, case_id: str) -> str:
-        """Generate comprehensive case summary using LLM."""
-        from tools.case_tools import generate_comprehensive_case_summary_tool
+        """Generate comprehensive case summary using two-step LLM approach.
+        
+        Step 1: Generate/enhance case metadata JSON (stored)
+        Step 2: Format stored metadata for display using LLM
+        """
+        from tools.case_tools import generate_comprehensive_case_summary_tool, format_case_summary_for_display_tool
         
         case_id = case_id.upper()
         case_dir = Path(settings.documents_dir) / "cases" / case_id
@@ -693,145 +697,33 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             return f"❌ Case {case_id} not found."
         
         msg = f"\n📊 Generating comprehensive summary for case {case_id}...\n"
-        msg += "(Using LLM to analyze all documents)\n\n"
         
         try:
-            # Generate comprehensive summary using LLM
+            # Step 1: Generate/enhance case metadata and store as JSON
+            msg += "   Step 1: Analyzing documents and generating metadata...\n"
             result = generate_comprehensive_case_summary_tool.run(case_id)
             
             if not result.get('success'):
                 return msg + f"❌ Failed: {result.get('error', 'Unknown error')}"
             
-            summary = result['case_summary']
+            msg += "   ✅ Case metadata enhanced and stored\n"
             
-            # Format output
+            # Step 2: Format stored metadata for display using LLM
+            msg += "   Step 2: Formatting summary for display...\n\n"
+            display_result = format_case_summary_for_display_tool.run(case_id)
+            
+            if not display_result.get('success'):
+                # Fallback: show raw summary if formatting fails
+                summary = result['case_summary']
+                msg += "=" * 60 + "\n\n"
+                msg += f"📝 {summary.get('summary', 'No summary available')}\n\n"
+                msg += f"📄 Documents analyzed: {summary.get('document_count', 0)}\n"
+                return msg
+            
+            # Show LLM-formatted output
             msg += "=" * 60 + "\n\n"
-            
-            # Primary Entity
-            primary = summary.get('primary_entity', {})
-            if primary:
-                entity_type = primary.get('entity_type', 'unknown').upper()
-                msg += f"🏢 PRIMARY ENTITY: {primary.get('name', 'Unknown')}\n"
-                msg += f"   Type: {entity_type}\n"
-                if primary.get('description'):
-                    msg += f"   {primary.get('description')}\n"
-                msg += "\n"
-            
-            # Companies (actual businesses being KYC'd, not document issuers)
-            companies = summary.get('companies', [])
-            if companies:
-                msg += f"🏛️  COMPANIES ({len(companies)}):\n"
-                for company in companies:
-                    msg += f"   • {company.get('name', 'Unknown')}\n"
-                    if company.get('cin'):
-                        msg += f"     CIN: {company.get('cin')}\n"
-                    if company.get('registered_address'):
-                        msg += f"     Address: {company.get('registered_address')}\n"
-                    if company.get('date_of_incorporation'):
-                        msg += f"     Incorporated: {company.get('date_of_incorporation')}\n"
-                    if company.get('paid_up_capital'):
-                        msg += f"     Capital: ₹{company.get('paid_up_capital')}\n"
-                    if company.get('gstin'):
-                        msg += f"     GSTIN: {company.get('gstin')}\n"
-                    if company.get('business_type'):
-                        msg += f"     Business: {company.get('business_type')}\n"
-                msg += "\n"
-            
-            # KYC Agencies (document issuers - government, banks, utilities)
-            agencies = summary.get('kyc_agencies', [])
-            if agencies:
-                msg += f"🏦 KYC AGENCIES ({len(agencies)}):\n"
-                msg += "   (Organizations that issued identity documents)\n"
-                for agency in agencies:
-                    agency_type = agency.get('agency_type', 'other')
-                    type_emoji = {"government": "🏛️", "bank": "🏦", "utility": "⚡", "other": "📋"}.get(agency_type, "📋")
-                    msg += f"   {type_emoji} {agency.get('name', 'Unknown')}\n"
-                    docs = agency.get('documents_issued', [])
-                    if docs:
-                        msg += f"      Documents: {', '.join(docs)}\n"
-                msg += "\n"
-            
-            # Persons
-            persons = summary.get('persons', [])
-            if persons:
-                msg += f"👥 PERSONS ({len(persons)}):\n"
-                for person in persons:
-                    role = person.get('role', '')
-                    role_str = f" ({role})" if role else ""
-                    msg += f"   • {person.get('name', 'Unknown')}{role_str}\n"
-                    if person.get('pan_number'):
-                        msg += f"     PAN: {person.get('pan_number')}\n"
-                    if person.get('date_of_birth'):
-                        msg += f"     DOB: {person.get('date_of_birth')}\n"
-                    if person.get('address'):
-                        msg += f"     Address: {person.get('address')}\n"
-                    if person.get('mobile'):
-                        msg += f"     Mobile: {person.get('mobile')}\n"
-                    if person.get('email'):
-                        msg += f"     Email: {person.get('email')}\n"
-                msg += "\n"
-            
-            # Relationships
-            relationships = summary.get('relationships', [])
-            if relationships:
-                msg += f"🔗 RELATIONSHIPS:\n"
-                for rel in relationships:
-                    msg += f"   • {rel.get('person')} {rel.get('relationship')} {rel.get('entity')}\n"
-                msg += "\n"
-            
-            # KYC Verification Status
-            verification = summary.get('kyc_verification', {})
-            if verification:
-                msg += "📋 KYC VERIFICATION:\n"
-                id_verified = "✅" if verification.get('identity_verified') else "❌"
-                addr_verified = "✅" if verification.get('address_verified') else "❌"
-                company_verified = "✅" if verification.get('company_verified') else "❌"
-                
-                msg += f"   {id_verified} Identity Verified\n"
-                msg += f"   {addr_verified} Address Verified\n"
-                msg += f"   {company_verified} Company Verified\n"
-                
-                missing_docs = verification.get('missing_documents', [])
-                if missing_docs:
-                    msg += f"\n   ⚠️  Missing Documents:\n"
-                    for doc in missing_docs:
-                        msg += f"      • {doc}\n"
-                
-                missing_info = verification.get('missing_information', [])
-                if missing_info:
-                    msg += f"\n   ⚠️  Missing Information:\n"
-                    for info in missing_info:
-                        msg += f"      • {info}\n"
-                msg += "\n"
-            
-            # Summary
-            if summary.get('summary'):
-                msg += f"📝 SUMMARY:\n"
-                msg += f"   {summary.get('summary')}\n\n"
-            
-            # Discrepancies
-            discrepancies = summary.get('discrepancies', [])
-            if discrepancies:
-                msg += f"⚠️  DISCREPANCIES:\n"
-                for disc in discrepancies:
-                    if isinstance(disc, str):
-                        msg += f"   • {disc}\n"
-                    elif isinstance(disc, dict):
-                        msg += f"   • {disc.get('issue', disc)}\n"
-                msg += "\n"
-            
-            # Recommendations
-            recommendations = summary.get('recommendations', [])
-            if recommendations:
-                msg += f"💡 RECOMMENDATIONS:\n"
-                for rec in recommendations:
-                    if isinstance(rec, str):
-                        msg += f"   • {rec}\n"
-                    elif isinstance(rec, dict):
-                        msg += f"   • {rec.get('action', rec)}\n"
-                msg += "\n"
-            
-            msg += f"📄 Documents analyzed: {summary.get('document_count', 0)}\n"
+            msg += display_result['formatted_summary']
+            msg += "\n\n" + "=" * 60 + "\n"
             msg += "💡 Case metadata updated!\n"
             return msg
             
