@@ -723,7 +723,7 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
             # Show LLM-formatted output
             msg += "=" * 60 + "\n\n"
             msg += display_result['formatted_summary']
-            msg += "\n\n" + "=" * 60 + "\n"
+            msg += "\n\n" + "=" * 60 + "\n\n"
             msg += "💡 Case metadata updated!\n"
             return msg
             
