@@ -943,15 +943,31 @@ CASE ID: {case_id}
 DOCUMENT DATA:
 {json.dumps(doc_summaries, indent=2)}
 
+IMPORTANT GUIDELINES:
+- The primary_entity can be either a "person" or a "company" - determine this from the documents
+- If primary_entity is a PERSON: company fields (CIN, incorporation_date, registered_address) are NOT required - the companies array can be empty
+- If primary_entity is a COMPANY: company details are required, and persons are typically directors/signatories
+- Only include fields that are actually present in the documents - do not make up or enforce missing optional fields
+
+KYC COMPLETION CRITERIA:
+- For PERSON as primary entity: KYC is COMPLETE if both Identity Proof (PAN/Aadhar/Passport/Driving License) AND Address Proof (Utility Bill/Bank Statement/Aadhar with address) are validated. Set identity_verified=true and address_verified=true accordingly.
+- For COMPANY as primary entity: KYC requires company registration documents (CIN, MOA/AOA), identity/address proof of directors/signatories, board resolution for directors, signatory authorization letter, and proof of registered office address. Set company_verified=true only if all required company documents are validated.
+
 Return a JSON object with:
-- primary_entity: {{entity_type, name, description}}
-- persons: [{{name, role, pan_number, date_of_birth, address, mobile, email}}]
-- companies: [{{name, cin, registered_address, incorporation_date}}]
+- primary_entity: {{entity_type: "person" or "company", name, description}}
+- persons: [{{name, role (optional), pan_number (if available), date_of_birth (if available), address (if available), mobile (if available), email (if available)}}]
+- companies: [{{name, cin (if available), registered_address (if available), incorporation_date (if available)}}] - OPTIONAL if primary entity is a person
 - kyc_agencies: [{{name, agency_type (government/bank/utility/other), documents_issued: [list of doc types]}}] - Organizations that issued the identity documents (e.g., UIDAI for Aadhar, Income Tax Dept for PAN, Passport Authority, RTO for Driving License, Banks, Utility companies)
-- kyc_verification: {{identity_verified: bool, address_verified: bool, company_verified: bool, missing_documents: [list], missing_information: [list]}}
+- kyc_verification: {{identity_verified: bool, address_verified: bool, company_verified: bool (only relevant if company KYC), missing_documents: [list], missing_information: [list]}}
 - summary: Brief narrative 
 - discrepancies: [{{entity, field, values: [conflicting values with doc refs], severity (Critical/High/Medium/Low), notes}}]
 - recommendations: [{{action, priority (High/Medium/Low), reason}}]
+
+DISCREPANCY VALIDATION RULES:
+- IGNORE case differences in names (e.g., "JOHN DOE" vs "John Doe" are the SAME person - NOT a discrepancy)
+- IGNORE first name/last name order differences (e.g., "John Doe" vs "Doe John" are the SAME person - NOT a discrepancy)
+- IGNORE minor whitespace or formatting differences in addresses
+- Only report REAL discrepancies like conflicting DOB, different ID numbers for same person, mismatched addresses that are genuinely different locations
 
 JSON OUTPUT:"""
             

@@ -269,6 +269,7 @@ def _get_kyc_extraction_prompt(raw_text: str, document_type: str) -> str:
     - Multiple persons (directors, account holders, etc.)
     - Companies/Organizations
     - Financial details
+    - Document type correction if classifier was wrong
     """
     prompt = f"""You are a KYC document data extraction specialist. Extract ALL entities and their details from the following OCR text.
 
@@ -277,13 +278,24 @@ OCR TEXT:
 {raw_text}
 ---
 
-DOCUMENT TYPE: {document_type}
+CLASSIFIED DOCUMENT TYPE: {document_type}
 
 INSTRUCTIONS:
 1. Extract ALL persons mentioned (directors, account holders, signatories, etc.)
 2. Extract ALL companies/organizations mentioned
 3. Extract financial details if present (bank accounts, balances, etc.)
-4. Return a JSON array of entities
+4. IMPORTANT: If the classified document_type appears INCORRECT based on the OCR content, suggest the correct type
+5. Return a JSON object with entities array and optional corrected_document_type
+
+DOCUMENT TYPES (for correction):
+- "pan" - PAN Card (has 10-char PAN number like ABCDE1234F)
+- "aadhar" - Aadhaar Card (has 12-digit Aadhaar number)
+- "passport" - Passport (has passport number, visa pages)
+- "driving" - Driving License (has DL number, vehicle classes)
+- "voter" - Voter ID Card (has EPIC number)
+- "utility" - Utility Bill (electricity, water, gas bills with account number, amount due)
+- "bank_statement" - Bank Statement
+- "company_registration" - Company documents (CIN, MOA, AOA)
 
 ENTITY TYPES:
 - "person": Individual with name, DOB, ID numbers, address
@@ -339,8 +351,14 @@ RULES:
 4. Remove spaces from ID numbers (PAN, Aadhaar)
 5. Use null for missing fields (not empty string)
 6. Include ALL persons found, even if same details repeat
-7. Return ONLY the JSON array, nothing else
+7. Return ONLY the JSON object, nothing else
+8. If document_type appears wrong (e.g., classified as 'driving' but content shows utility bill), include "corrected_document_type"
 
+OUTPUT FORMAT - Return a JSON object (not just an array):
+{{
+  "corrected_document_type": "utility" or null if classification was correct,
+  "entities": [ ... array of entity objects ... ]
+}}
 
 JSON OUTPUT:"""
     
@@ -395,8 +413,18 @@ def _extract_with_llm(raw_text: str, document_type: str) -> Dict[str, Any]:
             response_text = response_text[:-3]
         response_text = response_text.strip()
         
-        # Parse JSON array
-        entities = json.loads(response_text)
+        # Parse JSON - may be object with entities array or plain array
+        parsed_response = json.loads(response_text)
+        
+        # Handle both old array format and new object format with corrected_document_type
+        corrected_document_type = None
+        if isinstance(parsed_response, dict):
+            corrected_document_type = parsed_response.get("corrected_document_type")
+            entities = parsed_response.get("entities", [])
+        elif isinstance(parsed_response, list):
+            entities = parsed_response
+        else:
+            entities = []
         
         # Ensure it's a list
         if not isinstance(entities, list):
@@ -440,7 +468,10 @@ def _extract_with_llm(raw_text: str, document_type: str) -> Dict[str, Any]:
             f"{len(persons)} persons, {len(companies)} companies, {len(financial)} financial"
         )
         
-        return {
+        if corrected_document_type:
+            logger.info(f"LLM suggests document_type correction: {document_type} -> {corrected_document_type}")
+        
+        result = {
             "entities": cleaned_entities,
             "persons": persons,
             "companies": companies,
@@ -448,6 +479,11 @@ def _extract_with_llm(raw_text: str, document_type: str) -> Dict[str, Any]:
             "entity_count": len(cleaned_entities),
             **primary_entity  # Backward compatibility - flatten primary entity
         }
+        
+        if corrected_document_type:
+            result["corrected_document_type"] = corrected_document_type
+        
+        return result
         
     except json.JSONDecodeError as e:
         logger.warning(f"Failed to parse LLM response as JSON: {e}")
@@ -656,6 +692,14 @@ def extract_document_data(document_id: str, document_type: Optional[str] = None)
         if document_type and raw_text:
             logger.info(f"Extracting KYC fields using LLM for {document_type}...")
             kyc_data = _extract_with_llm(raw_text, document_type)
+        
+        # Check if LLM suggests a document type correction
+        corrected_doc_type = kyc_data.get("corrected_document_type")
+        if corrected_doc_type and corrected_doc_type != document_type:
+            logger.info(f"Updating document_type from '{document_type}' to '{corrected_doc_type}' based on LLM analysis")
+            metadata["classification"]["document_type"] = corrected_doc_type
+            metadata["classification"]["original_document_type"] = document_type
+            metadata["classification"]["type_corrected_by"] = "llm_extraction"
         
         # Log extraction result
         entity_count = kyc_data.get("entity_count", 0)

@@ -422,9 +422,13 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         # Handle "summarize case" or "summarize case <case_id>"
         if cmd == 'summarize case' or cmd == 'summarize':
             if st.session_state.case_reference:
-                return f"Generating summary for case {st.session_state.case_reference}..."
+                return self._summarize_case(st.session_state.case_reference)
             else:
                 return "❌ No case selected. Use 'select case <CASE_ID>' first or 'summarize case <CASE_ID>'"
+        
+        if cmd.startswith('summarize case '):
+            case_id = cmd.split(' ', 2)[-1].strip().upper()
+            return self._summarize_case(case_id)
         
         if cmd in ['help', '?', '/help']:
             return self._show_help()
@@ -537,6 +541,55 @@ Always prioritize efficiency and flexibility. Documents are first-class entities
         
         msg += "\n💡 Commands: `show cases` | `show docs` | `help`"
         return msg
+    
+    def _summarize_case(self, case_id: str) -> str:
+        """Generate comprehensive case summary using two-step LLM approach.
+        
+        Step 1: Generate/enhance case metadata JSON (stored)
+        Step 2: Format stored metadata for display using LLM
+        """
+        from tools.case_tools import generate_comprehensive_case_summary_tool, format_case_summary_for_display_tool
+        
+        case_id = case_id.upper()
+        case_dir = Path(settings.documents_dir) / "cases" / case_id
+        
+        if not case_dir.exists():
+            return f"❌ Case {case_id} not found."
+        
+        msg = f"\n📊 Generating comprehensive summary for case {case_id}...\n"
+        
+        try:
+            # Step 1: Generate/enhance case metadata and store as JSON
+            msg += "   Step 1: Analyzing documents and generating metadata...\n"
+            result = generate_comprehensive_case_summary_tool.run(case_id)
+            
+            if not result.get('success'):
+                return msg + f"❌ Failed: {result.get('error', 'Unknown error')}"
+            
+            msg += "   ✅ Case metadata enhanced and stored\n"
+            
+            # Step 2: Format stored metadata for display using LLM
+            msg += "   Step 2: Formatting summary for display...\n\n"
+            display_result = format_case_summary_for_display_tool.run(case_id)
+            
+            if not display_result.get('success'):
+                # Fallback: show raw summary if formatting fails
+                summary = result['case_summary']
+                msg += "=" * 60 + "\n\n"
+                msg += f"📝 {summary.get('summary', 'No summary available')}\n\n"
+                msg += f"📄 Documents analyzed: {summary.get('document_count', 0)}\n"
+                return msg
+            
+            # Show LLM-formatted output
+            msg += "=" * 60 + "\n\n"
+            msg += display_result['formatted_summary']
+            msg += "\n\n" + "=" * 60 + "\n"
+            msg += "💡 Case metadata updated!\n"
+            return msg
+            
+        except Exception as e:
+            logger.error(f"Error summarizing case: {e}", exc_info=True)
+            return msg + f"❌ Error: {str(e)}"
     
     def _show_help(self) -> str:
         """Show help message from config."""
